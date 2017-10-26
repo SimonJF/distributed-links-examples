@@ -25,3 +25,4 @@ typename ReceiveCommand =
 # Then proceeds to be a ReceiveCommand.
 typename ChatServer = ?(Nickname) . !(Topic, [Nickname], ~ServerToClientChannel) . ReceiveCommand;
 
+typename LinList(a) = [| LinNil | LinCons: (a, LinList(a)) |];

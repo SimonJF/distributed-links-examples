@@ -3,37 +3,59 @@ open ChatClient
 
 module MainServer {
 
-    var ap = new();
+    typename ServerMessage =
+        [&| BroadcastMessage: ?(Nickname, Message). End,
+            BroadcastChangeTopic: ?Topic. End,
+            NewClient: ?(Nickname, ServerToClientChannel). End,
+            GetServerState: !(Topic, [Nickname]). End |&];
+
+    var ap = (new(): AP(ServerMessage));
 
     # Main server loop, containing server state. Awaits (non-session) control
     # messages to update the state, or broadcast instructions to send things
     # along session channels.
-    fun serverLoop(topic, nicks, pids) {
+    sig serverLoop : (Topic, [Nickname], LinList(ServerToClientChannel)) ~%~> ()
+    fun serverLoop(topic, nicks, chans) {
       var ch = accept(ap);
       offer(ch) {
         case BroadcastMessage(ch) ->
           var ((nick, msg), _) = receive(ch);
-          broadcastMessage(DeliverMessage(nick, msg), pids);
-          serverLoop(topic, nicks, pids)
+          var chans = broadcastMessage(
+            fun(c) {
+                var c = select IncomingChatMessage c;
+                send ((nick, msg), c)
+            }, chans);
+          serverLoop(topic, nicks, chans)
         case BroadcastChangeTopic(ch) ->
           var (newTopic, _) = receive(ch);
-          broadcastMessage(DeliverNewTopic(newTopic), pids);
-          serverLoop(newTopic, nicks, pids)
+          var chans = broadcastMessage(
+            fun(c) {
+                var c = select NewTopic c;
+                send (newTopic, c)
+            }, chans);
+          serverLoop(newTopic, nicks, chans)
         case NewClient(ch) ->
-          var ((nick, pid), _) = receive(ch);
-          broadcastMessage(DeliverNewUser(nick), pids);
-          serverLoop(topic, nick :: nicks, pid :: pids)
+          var ((nick, newCh), _) = receive(ch);
+          var chans = broadcastMessage(
+            fun(c) {
+                var c = select NewUser c;
+                send (nick, c)
+            }, chans);
+          serverLoop(topic, nick :: nicks, LinCons(newCh, chans))
         case GetServerState(ch) ->
           ignore(send((topic, nicks), ch));
-          serverLoop(topic, nicks, pids)
+          serverLoop(topic, nicks, chans)
       }
     }
 
-    # Broadcasts a given message to the mailboxes of a list of PIDs
-    fun broadcastMessage(msg, pids) {
-      switch(pids) {
-        case [] -> ()
-        case pid :: pids -> pid ! msg; broadcastMessage(msg, pids)
+    # Maps a function over all channels
+    sig broadcastMessage : (
+        ((ServerToClientChannel) ~%~> ServerToClientChannel),
+        LinList(ServerToClientChannel)) ~%~> LinList(ServerToClientChannel)
+    fun broadcastMessage(f, chans) {
+      switch(chans) {
+        case LinNil -> LinNil
+        case LinCons(ch, chs) ->  LinCons(f(ch), (broadcastMessage(f, chs)))
       }
     }
 
@@ -49,10 +71,10 @@ module MainServer {
         ignore(send(newTopic, s))
     }
 
-    fun broadcastNewClient(nick, pid) {
+    fun broadcastNewClient(nick, ch) {
         var s = request(ap);
         var s = select NewClient s;
-        ignore(send((nick, pid), s))
+        ignore(send((nick, ch), s))
     }
 
     fun getServerState() {
@@ -67,6 +89,7 @@ module MainServer {
 ## each command to the serverLoop which will broadcast to other session clients.
 # Alas, we can't make this an inner function at the moment since we need a type
 # annotation, and type annotations are broken for inner functions at the moment
+sig clientHandlerLoop: (Nickname, ReceiveCommand) ~%~> ()
 fun clientHandlerLoop(nick, clientToServerChan) {
 
   offer(clientToServerChan) {
@@ -117,6 +140,7 @@ fun clientSendHandler(s) {
 }
 
 
+sig handleNewClient : (ChatServer) ~%~> ()
 fun handleNewClient(clientToServer) {
   # Get the name of the new client.
   var (name, clientToServer) = receive(clientToServer);
@@ -128,22 +152,22 @@ fun handleNewClient(clientToServer) {
   });
 
   # Fork off client send handler
-  var pid = spawn { clientSendHandler(serverToClient) };
+  # var pid = spawn { clientSendHandler(serverToClient) };
 
   # Register with the main loop
-  MainServer.broadcastNewClient(name, pid);
+  MainServer.broadcastNewClient(name, serverToClient);
 }
 
-fun acceptor(ap) server {
+fun acceptor(ap: AP(ChatServer)) server {
   # Accept a new client
-  var clientToServerRecvEnd = accept(ap);
-  var _ = spawn { handleNewClient(clientToServerRecvEnd) };
+  var clientToServer = accept(ap);
+  var _ = spawn { handleNewClient(clientToServer) };
   acceptor(ap)
 }
 
 fun main() {
   var (clientAP:AP(ChatServer)) = new();
-  var _ = spawn { MainServer.serverLoop(Topic("Hello, ABCD!"), [], []) };
+  var _ = spawn { MainServer.serverLoop(Topic("Hello, ABCD!"), [], LinNil) };
   var _ = spawn { acceptor(clientAP) };
   addRoute("/", fun(_) { ChatClient.mainPage(clientAP) } );
   addStaticRoute("/css", "css", [("css", "text/css")]);
