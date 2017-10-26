@@ -74,6 +74,9 @@ module Components {
       }
     }
 
+
+    var outgoingMsgAP = new();
+
     fun outgoingMsgLoop(s) {
       fun isTopicCmd(s) {
         (charAt(s, 0) == '/') &&
@@ -85,23 +88,34 @@ module Components {
         strsub(s, 7, strlen(s) - 7)
       }
 
-      receive {
-        case str ->
-          if (isTopicCmd(str)) {
-            var s = select ChangeTopic s;
-            var s = send(Topic(getTopic(str)), s);
-            outgoingMsgLoop(s)
-          } else {
-            var s = select ChatMessage s;
-            var s = send(Message(str), s);
-            outgoingMsgLoop(s)
-          }
+      fun receiveMsg() {
+        var msgChan = accept(outgoingMsgAP);
+        var (str, _) = receive(msgChan);
+        str
       }
+
+
+      var str = receiveMsg();
+
+      if (isTopicCmd(str)) {
+        var s = select ChangeTopic s;
+        var s = send(Topic(getTopic(str)), s);
+        outgoingMsgLoop(s)
+      } else {
+        var s = select ChatMessage s;
+        var s = send(Message(str), s);
+        outgoingMsgLoop(s)
+      }
+    }
+
+    fun sendOutgoingMessage(str) {
+      var s = request(outgoingMsgAP);
+      ignore(send(str, s))
     }
 
     fun chatBox(outgoingHandlerPid) {
       fun handleSubmit() {
-        outgoingHandlerPid ! getInputContents(chat_box_id);
+        sendOutgoingMessage(getInputContents(chat_box_id));
         clearInput(chat_box_id)
       }
 
@@ -131,22 +145,23 @@ module Components {
 
   fun nameBox(ap) {
     fun handleSubmitName() {
-        var s = request(ap);
-        var nick = getInputContents(nickname_box_id);
-        clearInput(nickname_box_id);
-        var s = send(Nickname(nick), s);
-        debug("sent nick");
-        var ((topic, nicks, incomingMsgChan), s) = receive(s);
-        debug("received data");
-        displayChatBox(topic, nicks, incomingMsgChan, s)
+        ignore(spawnClient {
+            var s = request(ap);
+            var nick = getInputContents(nickname_box_id);
+            clearInput(nickname_box_id);
+            var s = send(Nickname(nick), s);
+            debug("sent nick");
+            var ((topic, nicks, incomingMsgChan), s) = receive(s);
+            debug("received data");
+            displayChatBox(topic, nicks, incomingMsgChan, s)
+        })
     }
 
-    var hndlr = spawnClient { receive { case _ -> handleSubmitName() } };
 
     <#>
       <div id="nameBox">
         <p>Nickname:</p>
-        <form l:onsubmit="{hndlr ! ()}">
+        <form l:onsubmit="{ handleSubmitName() }">
           <input id="name_box" type="text"></input>
         </form>
       </div>
