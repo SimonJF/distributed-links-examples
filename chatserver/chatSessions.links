@@ -1,0 +1,27 @@
+# ChatSessions module -- contains the session types for chat interactions
+
+typename Nickname = [| Nickname : String |];
+typename Message = [| Message : String |];
+typename Topic = [| Topic : String |];
+
+# The server uses this to send messages (incoming message, new user, new topic, user left)
+# to the client.
+typename ServerToClientChannel =
+  [+| IncomingChatMessage : !(Nickname, Message) . ServerToClientChannel,
+      NewUser : !(Nickname) . ServerToClientChannel,
+      NewTopic : !(Topic) . ServerToClientChannel,
+      UserLeft : !(Nickname) .ServerToClientChannel
+  |+];
+
+
+# Receives a message / topic change.
+typename ReceiveCommand =
+  [&| ChatMessage : ?(Message) . ReceiveCommand,
+      ChangeTopic : ?(Topic). ReceiveCommand |&];
+# Chat server receives a nickname, then sends back a three-tuple of:
+#  1) The room's topic
+#  2) The list of nicknames of people already in the room
+#  3) A channel that the server can use to send messages to the client.
+# Then proceeds to be a ReceiveCommand.
+typename ChatServer = ?(Nickname) . !(Topic, [Nickname], ~ServerToClientChannel) . ReceiveCommand;
+
