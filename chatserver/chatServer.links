@@ -118,28 +118,6 @@ fun clientHandler(nick, chatServerRecvEnd, serverToClientRecvEnd) {
   clientHandlerLoop(nick, chatServerRecvEnd)
 }
 
-fun clientSendHandler(s) {
-  receive {
-    case DeliverMessage(nick, msg) ->
-      var s = select IncomingChatMessage s;
-      var s = send((nick, msg), s);
-      clientSendHandler(s)
-    case DeliverNewUser(nick) ->
-      var s = select NewUser s;
-      var s = send(nick, s);
-      clientSendHandler(s)
-    case DeliverNewTopic(topic) ->
-      var s = select NewTopic s;
-      var s = send(topic, s);
-      clientSendHandler(s)
-    case DeliverUserLeft(nick) ->
-      var s = select UserLeft s;
-      var s = send(nick, s);
-      clientSendHandler(s)
-  }
-}
-
-
 sig handleNewClient : (ChatServer) ~%~> ()
 fun handleNewClient(clientToServer) {
   # Get the name of the new client.
@@ -150,9 +128,6 @@ fun handleNewClient(clientToServer) {
     linfun (serverToClient) {
       clientHandler(name, clientToServer, serverToClient)
   });
-
-  # Fork off client send handler
-  # var pid = spawn { clientSendHandler(serverToClient) };
 
   # Register with the main loop
   MainServer.broadcastNewClient(name, serverToClient);
