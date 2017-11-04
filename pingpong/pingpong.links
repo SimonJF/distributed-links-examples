@@ -19,7 +19,7 @@ module ClientCommon {
   }
 
   fun logMessage(msg) {
-    appendChildren(<#>{stringToXml(msg)}</#>, getNodeById("msgs"));
+    appendChildren(<#><p>{stringToXml(msg)}</p></#>, getNodeById("msgs"));
   }
 
   fun sendButtonPress() {
@@ -35,13 +35,33 @@ module ClientCommon {
     var caption = if (isPinger) { "Send Ping!" } else { "Send Pong!" };
     page
       <html>
-        <head>Links Server AP test: client to client</head>
-        <h1>Hello!</h1>
-        <button id="pingButton" l:onclick="{ sendButtonPress() }" disabled="disabled" >
-          { stringToXml(caption) }
-        </button>
-        <h1>Messages:</h1>
-        <div id="msgs"></div>
+        <head>
+          <title>Links Ping Pong example</title>
+          <link href="http://fonts.googleapis.com/css?family=Merriweather:400,300italic,300" rel="stylesheet" type="text/css"></link>
+          <link href="http://fonts.googleapis.com/css?family=Kotta+One" rel="stylesheet" type="text/css"></link>
+          <link href="http://fonts.googleapis.com/css?family=Lora" rel="stylesheet" type="text/css"></link>
+          <link href="css/bootstrap.min.css" rel="stylesheet"></link>
+          <link href="css/abcd.css" rel="stylesheet"></link>
+        </head>
+
+        <div class ="jumbotron">
+          <div class="container">
+            <h1>PingPong Example</h1>
+          </div>
+        </div>
+
+        <div id="main" class="container marketing">
+          <div class="row featurette pagination-centered">
+            <button type="button" class="btn btn-lg" id="pingButton" 
+              l:onclick="{ sendButtonPress() }" disabled="disabled" >
+              { stringToXml(caption) }
+            </button>
+          </div>
+          <div class="row featurette">
+            <h2>Messages:</h2>
+            <div id="msgs"></div>
+          </div>
+        </div>
       </html>
   }
 }
@@ -116,6 +136,7 @@ fun main() {
   var srvAP = new();
   addRoute("/pinger", fun(_) { Pinger.setup(srvAP) });
   addRoute("/ponger", fun(_) { Ponger.setup(srvAP) });
+  addStaticRoute("/css", "css", [("css", "text/css")]);
   serveWebsockets();
   servePages();
 }
