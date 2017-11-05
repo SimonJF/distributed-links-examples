@@ -75,20 +75,26 @@ module Pinger {
     var ch = request(ap);
     logMessage("Established session connection with ponger!");
     enableButton();
-    commLoop(ch)
+    commLoop(ap, ch)
   }
 
-  ## Why does this need this annotation?
-  sig commLoop : (~PingPong) ~%e~>()
-  fun commLoop(ch) {
+  sig commLoop : (AP(PingPong), ~PingPong) ~%e~>()
+  fun commLoop(ap, ch) {
     awaitButtonPress();
     var ch = send(Ping, ch);
     logMessage("Sent Ping!");
     disableButton();
-    var (pong, ch) = receive(ch);
-    logMessage("Received Pong!");
-    enableButton();
-    commLoop(ch)
+    try {
+      var (_, ch) = receive(ch);
+      ch
+    } as (ch) in {
+      logMessage("Received Pong!");
+      enableButton();
+      commLoop(ap, ch)
+    } otherwise {
+      logMessage("Lost connection!");
+      commThread(ap)
+    }
   }
 
   fun setup(srvAP) {
@@ -108,19 +114,26 @@ module Ponger {
     # Accept a channel from the access point
     var ch = accept(ap);
     logMessage("Established session connection with pinger!");
-    commLoop(ch)
+    commLoop(ap, ch)
   }
 
-  sig commLoop : (PingPong) ~%e~>()
-  fun commLoop(ch) {
-    var (_, ch) = receive(ch);
-    logMessage("Received Ping!");
-    enableButton();
-    awaitButtonPress();
-    var ch = send(Pong, ch);
-    logMessage("Sent Pong!");
-    disableButton();
-    commLoop(ch)
+  sig commLoop : (AP(PingPong), PingPong) ~%e~>()
+  fun commLoop(ap, ch) {
+    try {
+      var (_, ch) = receive(ch);
+      ch
+    } as (ch) in {
+      logMessage("Received Ping!");
+      enableButton();
+      awaitButtonPress();
+      var ch = send(Pong, ch);
+      logMessage("Sent Pong!");
+      disableButton();
+      commLoop(ap, ch)
+    } otherwise {
+      logMessage("Lost connection!");
+      commThread(ap)
+    }
   }
 
   fun setup(srvAP) {

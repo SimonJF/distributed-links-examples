@@ -21,7 +21,7 @@ module MainServer {
       offer(ch) {
         case BroadcastMessage(ch) ->
           var ((nick, msg), _) = receive(ch);
-          var chans = broadcastMessage(
+          var chans = linMap(
             fun(c) {
                 var c = select IncomingChatMessage c;
                 send ((nick, msg), c)
@@ -29,7 +29,7 @@ module MainServer {
           serverLoop(topic, nicks, chans)
         case BroadcastChangeTopic(ch) ->
           var (newTopic, _) = receive(ch);
-          var chans = broadcastMessage(
+          var chans = linMap(
             fun(c) {
                 var c = select NewTopic c;
                 send (newTopic, c)
@@ -37,7 +37,7 @@ module MainServer {
           serverLoop(newTopic, nicks, chans)
         case NewClient(ch) ->
           var ((nick, newCh), _) = receive(ch);
-          var chans = broadcastMessage(
+          var chans = linMap(
             fun(c) {
                 var c = select NewUser c;
                 send (nick, c)
@@ -46,7 +46,7 @@ module MainServer {
         case ClientLeft(ch) ->
           var (nick, _) = receive(ch);
           var (nicks, chans) = deleteClient(nick, nicks, chans);
-          var chans = broadcastMessage(
+          var chans = linMap(
             fun(c) {
               var c = select UserLeft c;
               send(nick, c)
@@ -77,16 +77,15 @@ module MainServer {
     }
 
     # Maps a function over all channels
-    sig broadcastMessage : (
+    sig linMap : (
         ((ServerToClientChannel) ~%~> ServerToClientChannel),
         LinList(ServerToClientChannel)) ~%~> LinList(ServerToClientChannel)
-    fun broadcastMessage(f, chans) {
+    fun linMap(f, chans) {
       switch(chans) {
         case LinNil -> LinNil
-        case LinCons(ch, chs) -> LinCons(f(ch), (broadcastMessage(f, chs)))
+        case LinCons(ch, chs) -> LinCons(f(ch), (linMap(f, chs)))
       }
     }
-
 
     fun userLeft(nick) {
         var s = request(ap);
