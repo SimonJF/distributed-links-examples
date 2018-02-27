@@ -8,8 +8,8 @@ typename TwoFactorServer =
   ?(Username, Password).[+|
     Authenticated: ServerMain,
     Challenge: !ChallengeKey.?Response.
-      [+| Authenticated: ServerMain, AccessDenied: TwoFactorServer |+],
-    AccessDenied: TwoFactorServer |+];
+      [+| Authenticated: ServerMain, AccessDenied: End  |+],
+    AccessDenied: End |+];
 
 typename ServerMain = !Secret.End;
 typename TwoFactorClient = ~TwoFactorServer;
@@ -23,7 +23,7 @@ module Server {
 
   sig checkDetails : (Username, Password) ~> Bool
   fun checkDetails(username, password) {
-    (username == "Alice") && (password == "hunter2")
+    (username == "Simon") && (password == "hunter2")
   }
 
   sig checkDetailsExn : (Username, Password) ~> Bool
@@ -55,8 +55,8 @@ module Server {
       var s = select Authenticated s;
       serverMain(s)
     } else {
-      var s = select AccessDenied s;
-      twoFactorServer(s)
+      var _ = select AccessDenied s;
+      ()
     }
   }
 
@@ -71,8 +71,8 @@ module Server {
         serverMain(s);
       }
     } else {
-      var s = select AccessDenied s;
-      twoFactorServer(s)
+      var _ = select AccessDenied s;
+      ()
     }
   }
 
@@ -88,13 +88,22 @@ module Server {
           serverMain(s);
         }
       } else {
-        var s = select AccessDenied s;
-        twoFactorServerExn(s)
+        var _ = select AccessDenied s;
+        ()
       }
     } otherwise {
       cancel(s);
       print("An exception occurred!")
     }
+  }
+
+  fun acceptor(ap) {
+    # Accept from AP
+    var s = accept(ap);
+    # Spawn fresh 2FA handler process
+    var _ = spawn { twoFactorServerExn(s) };
+    # Accept more clients
+    acceptor(ap)
   }
 
 }
@@ -107,7 +116,6 @@ module Client {
   }
 
   ## Client stuff
-
   sig alert: (Bool, String) ~> ()
   fun alert(isError, txt) {
     var alertNode =
@@ -147,34 +155,21 @@ module Client {
     showError("Login failed!")
   }
 
+  fun hide(id) {
+    domReplaceChildren(<#></#>, getNodeById(id))
+  }
+
   fun hideForm() {
-    domReplaceChildren(<#></#>, getNodeById("formContainer"))
+    hide("formContainer")
+  }
+
+  fun hideMain() {
+    hide("mainContainer")
   }
 
   fun replaceForm(xml) {
     domReplaceChildren(xml, getNodeById("formContainer"))
-  }
-
-
-  fun showBalance(balance) {
-    var xml =
-      <#>
-        <h1>Balance: { stringToXml(balance) }</h1>
-      </#>;
-    domReplaceChildren(xml, getNodeById("mainContainer"))
-  }
-
-  sig clientMain : (ClientMain) ~> ()
-  fun clientMain(s) {
-    var (balance, _) = receive(s);
-    hideForm();
-    showBalance(balance)
-  }
-
-  sig generateResponse : (ChallengeKey) -> Response
-  fun generateResponse(key) {
-    key + 1
-  }
+  } 
 
   sig onSubmit : (() ~%~@ ()) ~%~> ()
   fun onSubmit(f) {
@@ -183,126 +178,132 @@ module Client {
     }
   }
 
-  sig twoFactorClient : (String, String, TwoFactorClient) ~%~> ()
-  fun twoFactorClient(username, password, s) {
-    hideAlert();
-    var s = send((username, password), s);
-    offer(s) {
-      case Authenticated(s) -> clientMain(s)
-      case Challenge(s) -> 
-        var (challengeKey, s) = receive(s);
-        showChallengeForm(challengeKey, s)
-      case AccessDenied(s) -> 
-        loginFailed();
-        showLoginForm(s)
-    }
-  }
+  sig makePage : (AP(TwoFactorServer)) ~> Page
+  fun makePage(ap) {
 
 
-  sig showLoginForm : (TwoFactorClient) ~%~> ()
-  fun showLoginForm(s) {
+    sig clientMain : (ClientMain) ~> ()
+    fun clientMain(s) {
+      var (balance, _) = receive(s);
 
-    var hndlr = spawnClient {
-      receive { case _ ->
-        var username = getInput("username");
-        var password = getInput("password");
-        twoFactorClient(username, password, s)
-      }
-    };
+      var xml =
+        <#>
+          <h3>Balance: { stringToXml(balance) }</h3>
+          <p>
+            <a href="#" l:onclick="{ hideMain(); showLoginForm() }">Log out</a>
+          </p>
+        </#>;
 
-    var form =
-      <#>
-          <form l:onsubmit="{ hndlr ! () }" class="form-signin">
-            <label for="username" class="sr-only">Username</label>
-            <input type="text" id="username" class="form-control"
-              placeholder="username" required="true" autofocus="true"></input>
-            <label for="inputpassword" class="sr-only">Password</label>
-            <input type="password" id="password" class="form-control" 
-              placeholder="password" required="true"></input>
-            <button class="btn btn-lg btn-primary btn-block" type="submit">Sign in</button>
-          </form>
-      </#>;
-    replaceForm(form)
-  }
-
-  fun showChallengeForm(challengeKey, s) { 
-
-    fun form(hndlr) {
-      <#>
-          <form l:onsubmit="{ hndlr ! () }" class="form-signin">
-            <div>
-              <p>It seems you are logging on from a new device.</p>
-              <p>To ensure security of your account, please enter the following
-                 key into your hardware token, and enter the digits shown on the screen</p>
-               <p>Key: { stringToXml(intToString(challengeKey)) }</p>
-            </div>
-            <label for="challengeResponse" class="sr-only">challengeResponse</label>
-            <input type="text" id="challengeResponse" class="form-control"
-              placeholder="Response Code" required="true" autofocus="true"></input>
-            <button class="btn btn-lg btn-primary btn-block" type="submit">Submit</button>
-          </form>
-      </#>
+      hideForm();
+      domReplaceChildren(xml, getNodeById("mainContainer"))
     }
 
-    replaceForm(form(self()));
-
-    onSubmit(linfun() {
-      var response = getInput("challengeResponse");
-      var s = send(stringToInt(response), s);
+    sig twoFactorClient : (String, String, TwoFactorClient) ~%~> ()
+    fun twoFactorClient(username, password, s) {
+      hideAlert();
+      var s = send((username, password), s);
       offer(s) {
         case Authenticated(s) -> clientMain(s)
-        case AccessDenied(s) -> loginFailed(); showLoginForm(s)
+        case Challenge(s) -> 
+          var (challengeKey, s) = receive(s);
+          showChallengeForm(challengeKey, s)
+        case AccessDenied(_) -> 
+          loginFailed();
+          showLoginForm()
       }
-    })
-  }
+    }
 
-  sig makePage : () ~> Page
-  fun makePage() {
-    var (clientEP : TwoFactorClient) = 
-      fork (fun(serverEP) { Server.twoFactorServer(serverEP) }); 
+    fun showLoginForm() {
+      var hndlr = spawnClient {
+        receive { case _ ->
+          var username = getInput("username");
+          var password = getInput("password");
+          var s = request(ap);
+          try (twoFactorClient(username, password, s)) as _ in { () } otherwise {
+            showError("Server error, please try again!");
+            showLoginForm()
+          }
+        }
+      };
+
+      var form =
+        <#>
+            <form l:onsubmit="{ hndlr ! () }" class="form-signin">
+              <label for="username" class="sr-only">Username</label>
+              <input type="text" id="username" class="form-control"
+                placeholder="Username" required="true" autofocus="true"></input>
+              <label for="inputpassword" class="sr-only">Password</label>
+              <input type="Password" id="password" class="form-control" 
+                placeholder="password" required="true"></input>
+              <button class="btn btn-lg btn-primary btn-block" type="submit">Sign in</button>
+            </form>
+        </#>;
+      replaceForm(form)
+    }
+
+    fun showChallengeForm(challengeKey, s) { 
+
+      fun form(hndlr) {
+        <#>
+            <form l:onsubmit="{ hndlr ! () }" class="form-signin">
+              <div>
+                <p>It seems you are logging on from a new device.</p>
+                <p>To ensure security of your account, please enter the following
+                   key into your hardware token, and enter the digits shown on the screen</p>
+                 <p>Key: { stringToXml(intToString(challengeKey)) }</p>
+              </div>
+              <label for="challengeResponse" class="sr-only">challengeResponse</label>
+              <input type="text" id="challengeResponse" class="form-control"
+                placeholder="Response Code" required="true" autofocus="true"></input>
+              <button class="btn btn-lg btn-primary btn-block" type="submit">Submit</button>
+            </form>
+        </#>
+      }
+
+      replaceForm(form(self()));
+
+      onSubmit(linfun() {
+        var response = getInput("challengeResponse");
+        var s = send(stringToInt(response), s);
+        offer(s) {
+          case Authenticated(s) -> clientMain(s)
+          case AccessDenied(_) -> loginFailed(); showLoginForm()
+        }
+      })
+    }
 
     var _ = spawnClient {
-      showLoginForm(clientEP); 
+      showLoginForm(); 
       showInfo("Please sign in.")
     };
 
     page
-    <html>
-      <head>
-        <title>Bank of SPLS</title>
-        <link href="css/bootstrap.min.css" rel="stylesheet"></link>
-        <link href="css/signin.css" rel="stylesheet"></link>
-        <script src="css/fontawesome-all.js"></script>
-      </head>
+      <html>
+        <head>
+          <title>Bank of SPLS</title>
+          <link href="css/bootstrap.min.css" rel="stylesheet"></link>
+          <link href="css/signin.css" rel="stylesheet"></link>
+          <script src="css/fontawesome-all.js"></script>
+        </head>
 
-      <body>
-        <div id="pageBody" class="text-center wider">
-          <i class="fas fa-university fa-7x"></i>
-          <h1 class="h2 mb-2 font-weight-normal">Bank of SPLS</h1>
-          <div id="alertBox"></div>
-          <div id="formContainer"></div>
-          <div id="mainContainer"></div>
-        </div>
-      </body>
-    </html>
-
+        <body>
+          <div id="pageBody" class="text-center wider">
+            <i class="fas fa-university fa-7x"></i>
+            <h1 class="h2 mb-2 font-weight-normal">Bank of SPLS</h1>
+            <div id="alertBox"></div>
+            <div id="formContainer"></div>
+            <div id="mainContainer"></div>
+          </div>
+        </body>
+      </html>
   }
 }
 
-
-
-##    <html>
-##      <body>
-##        <h1>Two-Factor Authentication</h1>
-##        <div id="status">
-##          <p>Status: <div id="statusText">Not logged in.</div></p>
-##        </div>
-##        <div id="pageBody"></div>
-##      </body>
-##    </html>
-
 fun main() {
-  addRoute("/", fun(_) { Client.makePage() });
+  # Create AP
+  var (ap : AP(TwoFactorServer)) = new();
+  var _ = spawn { Server.acceptor(ap) };
+  addRoute("/", fun(_) { Client.makePage(ap) });
   addStaticRoute("/css", "css", [("css", "text/css")]);
   serveWebsockets();
   servePages()
