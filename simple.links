@@ -1,0 +1,63 @@
+typename EqualityServer = ?Int.?Int.!Bool.End;
+typename EqualityClient = ~EqualityServer;
+
+sig equalityClient : (EqualityClient) ~> ()
+fun equalityClient(s) {
+  var s = send(5, s);
+  var s = send(5, s);
+  var (isEqual, _) = receive(s);
+  if (isEqual) {
+    print("Numbers were equal!")
+  } else {
+    print("Numbers were not equal!")
+  }
+}
+
+sig equalityServer : (EqualityServer) ~> ()
+fun equalityServer(s) {
+  var (x1, s) = receive(s);
+  var (x2, s) = receive(s);
+  var _ = send(x1 == x2, s);
+  ()
+}
+
+
+fun main() {
+  var srv = fork (equalityClient);
+  equalityServer(srv)
+}
+
+
+#sig equalityClientIncomplete : (EqualityClient) ~> ()
+#fun equalityClientIncomplete(s) {
+#  var s = send(5, s);
+#  var s = send(5, s);
+#  ()
+#}
+
+# sig equalityClientDuplicate : (EqualityClient) ~> ()
+# fun equalityClientDuplicate(s) {
+#   var t = send(5, s);
+#   var s = send(5, s);
+#   var s = send(5, s);
+#   var (isEqual, _) = receive(s);
+#   if (isEqual) {
+#     print("Numbers were equal!")
+#   } else {
+#     print("Numbers were not equal!")
+#   }
+# }
+
+# sig equalityClientMismatch : (EqualityClient) ~> ()
+# fun equalityClientMismatch(s) {
+#   var s = send(5, s);
+#   var s = send("Hello!", s);
+#   var (isEqual, _) = receive(s);
+#   if (isEqual) {
+#     print("Numbers were equal!")
+#   } else {
+#     print("Numbers were not equal!")
+#   }
+# }
+
+main()
