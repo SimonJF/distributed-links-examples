@@ -1,0 +1,280 @@
+typename CalcServer = [&|Add:?Int.?Int.!Int.End, Sub:?Int.?Int.!Int.End,
+                   Mult:?Int.?Int.!Int.End, Div:?Int.?Int.!Int.End,
+                   Neg:?Int.!Int.End, MemAdd:?Int.End, MemRec:!Int.End|&];
+
+typename BinOp = [|Add|Sub|Mult|Div|];
+
+typename DomEvent = [&| Eval: End, Neg: End, MemAdd: End, MemRec: End |&];
+
+typename MemoryCell = [&| Set: ?Int.End, Get: !Int.End |&];
+
+# Access point to allow a client<->server connection to be established
+sig ap : AP(CalcServer)
+var ap = new();
+
+# Access point to allow the DOM to dispatch events
+sig domAP : AP(DomEvent)
+var domAP = new();
+
+# Access point to allow interaction with memory
+sig cellAP : AP(MemoryCell)
+var cellAP = new();
+
+module Parser {
+
+  sig parse : (String) ~> [String]
+  fun parse(exp) {
+    var word = explode(exp);
+    var ans =
+      # to allow starting with a negative number
+      if (hd(word) =='-') split(word, tl(word), 1)
+      else split(word, word, 0);
+    switch(ans) {
+      case Nothing -> ["NaN"]
+      case Just(x) -> toPostfix(x, [])
+    }
+  }
+
+  sig isOperator : (String) ~> Bool
+  fun isOperator(x) {
+    x == "+" || x == "-" || x == "*" || x == "/"
+  }
+
+  fun split(full_exp, curr_exp, index) {
+    switch(curr_exp) {
+      case [] -> Just([implode(full_exp)])
+      case x::xs ->
+        if (isOperator(implode([x]))) {
+          if (xs == [] || isOperator(implode([hd(xs)]))) Nothing
+          else {
+            var rest = split(xs, xs, 0);
+            switch(rest) {
+              case Nothing -> Nothing
+              case Just(n) -> Just(implode(take(index, full_exp))::implode([x])::n)
+            }
+          }
+        } else {
+          split(full_exp, xs, index+1)
+        }
+    }
+  }
+
+  sig opGreater : (String, String) ~> Bool
+  fun opGreater(left, right) {
+    left == "*" || left == "/" && right == "+" || right == "-"
+  }
+
+  sig toPostfix :([String], [String]) ~> [String]
+  fun toPostfix(inf, stack) {
+    switch(inf) {
+      case [] -> stack
+      case x::xs ->
+        if (isOperator(x)) {
+          switch(stack) {
+            case [] -> toPostfix(xs, x::stack)
+            case y::ys ->
+              if (opGreater(y, x)) {
+                y::toPostfix(xs, x::ys)
+              } else {
+                toPostfix(xs, x::stack)
+              }
+          }
+        } else {
+          x::toPostfix(xs, stack)
+        }
+    }
+  }
+}
+
+module Memory {
+  fun cellLoop(x) {
+    var s = accept(cellAP);
+    offer(s) {
+      case Get(s) -> ignore(send(x, s)); cellLoop(x)
+      case Set(s) ->
+        var (x, _) = receive(s);
+        cellLoop(x)
+    }
+  }
+
+  fun requestCell() {
+    var s = request(cellAP);
+    var s = select Get s;
+    var (res, _) = receive(s);
+    res
+  }
+
+  fun updateCell(n) {
+    var s = request(cellAP);
+    var s = select Set s;
+    ignore(send(n, s))
+  }
+}
+
+
+
+fun calcReceive() server {
+  var s = accept(ap); # Gets a session of type CalcServer
+  offer (s) {
+    case Add(s) ->
+      var (x,s) = receive(s);
+      var (y,s) = receive(s);
+      var _ = send(x+y,s);
+      ()
+    case Sub(s) ->
+      var (x,s) = receive(s);
+      var (y,s) = receive(s);
+      var _ = send(x-y,s);
+      ()
+    case Mult(s) ->
+      var (x,s) = receive(s);
+      var (y,s) = receive(s);
+      var _ = send(x*y,s);
+      ()
+    case Div(s) ->
+      var (x,s) = receive(s);
+      var (y,s) = receive(s);
+      var _ = send(x/y,s);
+      ()
+    case Neg(s) ->
+      var (x,s) = receive(s);
+      var _ = send(-1*x,s);
+      ()
+    case MemAdd(s) ->
+      var (x,s) = receive(s);
+      Memory.updateCell(x);
+      calcReceive()
+    case MemRec(s) ->
+      var _ = send(Memory.requestCell(),s);
+      ()
+  };
+  calcReceive()
+}
+
+fun sendBinop(s, x, y, binop) {
+  switch(binop) {
+    case "+" -> receive(send(y,send(x,select Add s)))
+    case "-" -> receive(send(y,send(x,select Sub s)))
+    case "*" -> receive(send(y,send(x,select Mult s)))
+    case "/" -> receive(send(y,send(x,select Div s)))
+  }
+}
+
+fun eval_rec(stack, postf) {
+  switch(postf) {
+    case [] -> hd(stack)
+    case x::xs ->
+      if (Parser.isOperator(x)) {
+        switch(stack) {
+          case [] -> error("Empty stack -- should never happen")
+          case right::left::tail ->
+            var (res, s) = sendBinop(request(ap),left,right,x);
+            eval_rec(res::tail, xs)
+        }
+      } else {
+        eval_rec(stringToInt(x)::stack, xs)
+      }
+  }
+}
+
+fun domWorker() {
+  var res = offer(accept(domAP)) {
+    case Eval(_) ->
+      var exp = domGetAttributeFromRef(getNodeById("display"), "value");
+      var postf = Parser.parse(exp);
+      eval_rec([], postf)
+    case Neg(_) ->
+      var s = request(ap);
+      var x = domGetAttributeFromRef(getNodeById("display"), "value");
+      receive(send(stringToInt(x),select Neg s)).1
+    case MemAdd(_) ->
+      var s = request(ap);
+      var x = stringToInt(domGetAttributeFromRef(getNodeById("display"), "value"));
+      var s = send(x,select MemAdd s);
+      x
+    case MemRec(_) ->
+      var s = request(ap);
+      receive(select MemRec s).1
+  };
+  format(res);
+  domWorker()
+}
+
+sig format : (Int) ~> ()
+fun format(res) {
+  var _ = domSetAttributeFromRef(getNodeById("display"), "value", intToString(res));
+  ()
+}
+
+sig append : (String) ~> ()
+fun append(end) {
+  var beg = domGetAttributeFromRef(getNodeById("display"), "value");
+  var _ = domSetAttributeFromRef(getNodeById("display"), "value", beg^^end);
+  ()
+}
+
+fun mainPage() {
+  var clientPid = spawnClient { domWorker() };
+
+  fun memRec() { ignore(select MemRec request(domAP)) }
+  fun memAdd() { ignore(select MemAdd request(domAP)) }
+  fun eval() { ignore(select Eval request(domAP)) }
+  fun neg() { ignore(select Neg request(domAP)) }
+
+  var _ = spawn { calcReceive() };
+  page
+   <html>
+    <body>
+     <center>
+      <h1>Links Calculator with Distributed Memory</h1>
+      <form  Name="calc">
+      <table id="calc">
+      <tr>
+      <td colspan="5"><input id="display" disabled="disabled" name="display" value="" type="text"/></td>
+      <td style="display:none"><input name="M" type="number"/></td>
+      </tr>
+      <tr>
+      <td><input type="button" value="MC" l:onclick="{ () }"/></td>
+      <td><input type="button" value="1" l:onclick="{ append("1") }" /></td>
+      <td><input type="button" value="2" l:onclick="{ append("2") }" /></td>
+      <td><input type="button" value="3" l:onclick="{ append("3") }" /></td>
+      <td><input type="button" value="+" l:onclick="{ append("+") }" /></td>
+      </tr>
+      <tr>
+      <td><input type="button" value="MR" l:onclick="{ memRec() }"/></td>
+      <td><input type="button" value="4" l:onclick="{ append("4") }" /></td>
+      <td><input type="button" value="5" l:onclick="{ append("5") }" /></td>
+      <td><input type="button" value="6" l:onclick="{ append("6") }" /></td>
+      <td><input type="button" value="-" l:onclick="{ append("-") }" /></td>
+      </tr>
+      <tr>
+      <td><input type="button" value="M+" l:onclick="{ memAdd() }"/></td>
+      <td><input type="button" value="7" l:onclick="{ append("7") }" /></td>
+      <td><input type="button" value="8" l:onclick="{ append("8") }" /></td>
+      <td><input type="button" value="9" l:onclick="{ append("9") }" /></td>
+      <td><input type="button" value="x" l:onclick="{ append("*") }" /></td>
+      </tr>
+      <tr>
+      <td><input type="button" value="C" l:onclick=
+        "{ var _ = domSetAttributeFromRef(getNodeById("display"), "value", ""); () }"/>
+      </td>
+      <td><input type="button" value="0" l:onclick="{ append("0") }" /></td>
+      <td><input type="button" value="=" l:onclick="{ eval() }" /></td>
+      <td><input type="button" value="±" l:onclick="{ neg()}" /></td>
+      <td><input type="button" value="/" l:onclick="{ append("/") }" /></td>
+      </tr>
+      </table>
+     </form>
+    </center>
+    </body>
+   </html>
+}
+
+fun main() server {
+  var _ = spawn { Memory.cellLoop(0) };
+  addRoute("/", fun(_) { mainPage() });
+  serveWebsockets();
+  servePages();
+}
+
+main()
