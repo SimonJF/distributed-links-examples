@@ -1,5 +1,6 @@
 open ChatSessions
 open ChatClient
+open Utility
 
 #helper functions:
 fun member(elem , l) {
@@ -8,6 +9,193 @@ fun member(elem , l) {
     case (x::xs) -> x == elem || member(elem, xs)
   }
 }
+
+
+module Room {
+  # Messages sent from workers to a room
+  typename RoomReceive =
+  [&|Join: ?ChatServer         .End,
+     Chat: ?(Nickname, Message).End,
+     NewTopic: ?Topic          .End,
+     Leave: ?Nickname          .End|&];
+
+  typename Room = (name:String, topic:String, ap:AP(RoomReceive));
+
+  fun loop(state) {
+    offer(s) {
+      case Join(s) -> TODO
+      case Chat((nick, msg)) -> TODO
+      case NewTopic(topic) -> TODO
+      case Leave -> TODO
+    }
+  }
+
+  sig create : (String) ~> Room
+  fun create(roomName) {
+    var ap = new();
+    var state = (name=roomName, topic="Hello, world!", ap=ap);
+    var _ = spawn { loop(state) };
+    ap
+  }
+
+}
+
+
+module RoomSupervisor {
+
+  typename RoomJoinResponse =
+    [| | UsernameTaken
+       | InvalidRoom
+       | Joined: (Topic, ClientReceive)
+       | JoinedAsModerator: (Topic, ClientReceive, ModeratorSend) |]
+
+
+  # Messages sent from the client to add / remove
+  # / list / join rooms
+  typename RoomSupervisor =
+    [&|
+      AddRoom: ?RoomName.!Bool.End, # Bool: whether add was successful
+      RemoveRoom: ?RoomName.End,
+      ListRooms: ![RoomName].End,
+      ConnectToRoom: ?(Nickname, RoomName).!RoomJoinResponse.End
+    |&]
+
+
+  sig supervisorAP : AP(RoomSupervisor)
+  var supervisorAP = new();
+
+
+  fun roomExists(roomName, rooms) {
+    StringAssocList.contains(roomName, rooms)
+  }
+
+  fun lookupRoom(roomName, rooms) {
+    StringAssocList.lookup(roomName, rooms)
+  }
+
+  fun removeRoom(roomName, rooms) {
+    switch StringAssocList.lookup(roomName, rooms) {
+      case Just(room) ->
+        Room.kill(rooms)
+        filter(fun(name, _) { name != roomName }, rooms)
+      case None -> rooms
+    }
+  }
+
+  # TODO: Links doesn't have maps / hashtables at the moment,
+  # so we're using an inappropriate data structure (list) here.
+  # When the Proper Modules stuff gets done, it would be good to
+  # replace this with a stdlib hashtable implementation.
+  fun loop(rooms) {
+    var s = accept(supervisorAP);
+    offer(s) {
+      case AddRoom(s) ->
+        var (name, s) = receive(s);
+        # Create room if it doesn't exist, notify client of outcome
+        if (roomExists(name)) {
+          var room = Room.create(name);
+          var _ = send(true, s);
+          loop(rooms ++ [room])
+        } else {
+          var _ = send(false, s);
+          loop(rooms)
+        }
+      case RemoveRoom(s) ->
+        var (roomName, _) = receive(s);
+        loop(removeRoom(roomName, rooms))
+      case ListRooms(s) ->
+        var _ = send(map(fun(name, _) { name }, rooms), s);
+        loop(rooms)
+      case ConnectToRoom(s) ->
+        var ((nick, roomName), s) = receive(s);
+        switch(lookup(roomName, rooms)) {
+          case Just(room) ->
+            var joinResult = Room.join(nick, roomName);
+            var _ = send(joinResult, s);
+            loop(rooms)
+          case Nothing ->
+            var _ = send(InvalidRoom, s);
+            loop(rooms)
+        }
+    }
+  }
+
+  var supervisorPid = spawn { loop([]) }
+
+# [&|
+#   AddRoom: ?RoomName.!Bool.End, # Bool
+#   RemoveRoom: ?RoomName.End,
+#   ListRooms: ![RoomName].End,
+#   ConnectToRoom: ?(Nickname, RoomName).!RoomJoinResponse.End
+# |&]
+
+  fun addRoom(name) {
+    var s = request(supervisorAP);
+    var s = select AddRoom s;
+    var s = send(name, s);
+    var (res, _) = receive(s);
+    res
+  }
+
+  fun removeRoom(name) {
+    var s = request(supervisorAP);
+    var s = select RemoveRoom s;
+    ignore(send(name, s))
+  }
+
+  fun listRooms() {
+    var s = request(supervisorAP);
+    var s = select ListRooms s;
+    var (rooms, _) = receive(s);
+    rooms
+  }
+
+  fun connectToRoom(name, roomName) {
+    var s = request(supervisorAP);
+    var s = select ConnectToRoom s;
+    var s = send(name, roomName);
+    var (res, _) = receive(s);
+    res
+  }
+}
+
+# keeps track of all rooms (by name) and their corresponding handlers
+fun roomsLoop(rooms, handlers) server {
+  fun getRoomHandler(room, rooms, handlers) {
+    fun getNewRoomHandler() {
+      var room_status = (name=room, topic=Topic("hello"), users=[]);
+      spawn { perRoomLoop(room_status) }
+    }
+    switch(rooms) {
+      # if no handler found, its a new room so create a new handler
+      case [] -> (getNewRoomHandler(), true)
+      case x::xs -> if (x == room) (hd(handlers), false)
+                    else getRoomHandler(room, xs, tl(handlers))
+    }
+  }
+
+  receive {
+    case AddRoom(room, handler) ->
+      roomsLoop(room::rooms, handler::handlers)
+    case RemoveRoom(handler) ->
+      # TODO
+      roomsLoop(rooms, handler)
+    case GetRooms(pid) ->
+      pid ! rooms;
+      roomsLoop(rooms, handlers)
+    case GetRoomHandler(room, pid) ->
+      var (handler, new) = getRoomHandler(room, rooms, handlers);
+      pid ! handler;
+      if (new) roomsLoop(room::rooms, handler::handlers)
+      else roomsLoop(rooms, handlers)
+  }
+}
+
+
+# supervisor access point (for communication between the supervisor
+# and workers)
+sig sap : AP(Supervisor)
+var sap = new();
 
 ## clientHandler loop: Reads incoming requests from the client, dispatches
 ## each command to the perRoomLoop which will broadcast to other room members.
@@ -101,15 +289,6 @@ fun moderatorHandler(channel, loopPid) {
       moderatorHandler(channel, loopPid)
   }
 }
-
-# Broadcasts a given message to the mailboxes of a list of PIDs
-fun broadcastMessage(msg, users) {
-  switch(users) {
-    case [] -> ()
-    case user :: users -> user.pid ! msg; broadcastMessage(msg, users)
-  }
-}
-
 # status : ( name:Room, topic:Topic, users:[User] )
 # user : ( nick:Nickname, pid:ClientSendHandler, isAdmin:Bool,
 #          isMuted:Bool )
@@ -242,37 +421,6 @@ fun clientAcceptor(ap, loopPid) server {
   clientAcceptor(ap, loopPid)
 }
 
-# keeps track of all rooms (by name) and their corresponding handlers
-fun roomsLoop(rooms, handlers) server {
-  fun getRoomHandler(room, rooms, handlers) {
-    fun getNewRoomHandler() {
-      var room_status = (name=room, topic=Topic("hello"), users=[]);
-      spawn { perRoomLoop(room_status) }
-    }
-    switch(rooms) {
-      # if no handler found, its a new room so create a new handler
-      case [] -> (getNewRoomHandler(), true)
-      case x::xs -> if (x == room) (hd(handlers), false)
-                    else getRoomHandler(room, xs, tl(handlers))
-    }
-  }
-
-  receive {
-    case AddRoom(room, handler) ->
-      roomsLoop(room::rooms, handler::handlers)
-    case RemoveRoom(handler) ->
-      # TODO
-      roomsLoop(rooms, handler)
-    case GetRooms(pid) ->
-      pid ! rooms;
-      roomsLoop(rooms, handlers)
-    case GetRoomHandler(room, pid) ->
-      var (handler, new) = getRoomHandler(room, rooms, handlers);
-      pid ! handler;
-      if (new) roomsLoop(room::rooms, handler::handlers)
-      else roomsLoop(rooms, handlers)
-  }
-}
 
 fun main() {
   var clientAP = new();

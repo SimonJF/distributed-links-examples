@@ -3,7 +3,7 @@
 typename Nickname = String;
 typename Message = String;
 typename Topic = String;
-typename Room = String;
+typename RoomName = String;
 
 # Messages received by a connected client
 typename ClientReceive =
@@ -23,9 +23,8 @@ typename ClientSend =
       Leaving : ChatClient |+];
 
 typename ClientConnect =
-  ?([Room]).!(Room, Nickname).
-    [&| Join:?(Room, Topic, Bool, ClientReceive, ModeratorSend)
-        . ClientSend,
+  ?([RoomName]).!(RoomName, Nickname).
+    [&| Join:?(Topic, ClientReceive, ModeratorSend) . ClientSend,
         Nope: End
     |&];
 
