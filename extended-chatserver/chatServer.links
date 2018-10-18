@@ -128,8 +128,8 @@ fun perRoomLoop(status) server {
       case [] -> []
       case x::xs ->
         if (x.nick == nick)
-          (x with isMuted=not(x.isMuted))::tl(users)
-        else hd(users)::muteUserByName(nick, xs)
+          (x with isMuted=not(x.isMuted)) :: xs
+        else x::muteUserByName(nick, xs)
     }
   }
 
@@ -137,8 +137,8 @@ fun perRoomLoop(status) server {
     switch(users) {
       case [] -> []
       case x::xs ->
-        if (x.nick == nick) (x with isAdmin=true)::tl(users)
-        else hd(users)::makeModeratorByName(nick, xs)
+        if (x.nick == nick) (x with isAdmin=true) :: xs
+        else x::makeModeratorByName(nick, xs)
     }
   }
 
