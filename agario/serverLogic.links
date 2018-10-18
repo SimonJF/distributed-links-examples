@@ -1,0 +1,39 @@
+open Logic
+
+fun dictUpdatePlayer(key:Int, value:PlayerState, dict) {
+  switch(dict) {
+    case [] -> []
+    case (k,v:PlayerState)::xs ->
+      if (k == key) {
+        (key, value)::xs
+      } else (k,v)::dictUpdatePlayer(key, value, xs)
+  }
+}
+
+fun updatePlayerMass(blobs_ids, player) {
+  switch(blobs_ids) {
+    case [] -> player.2
+    case (player_id, blob_id)::xs ->
+      var blobs_new =
+        if (player_id == player.1)
+          map(fun(x) {if (x.id==blob_id) (x with mass=x.mass+3) else x}, player.2.blobs)
+        else player.2.blobs;
+      updatePlayerMass(xs, (player with blobs=blobs_new))
+  }
+}
+
+fun dictUpdateMass(blobs_ids, dict) {
+  map(fun(x) {updatePlayerMass(blobs_ids, x)}, dict)
+}
+
+fun updatePlayerBlobs(blobs, players:[(Int, PlayerState)]) {
+  map(fun(x) {var blobs_new = notEatenBlobs(blobs, x.2.blobs, x.1);
+              (x.1, (x.2 with blobs=blobs_new)) }, players)
+}
+
+fun notEatenBlobs(eaten, player_blobs, player_id) {
+  switch(eaten) {
+    case [] -> player_blobs
+    case x::xs -> notEatenBlobs(xs, filter(fun(blob) {blob.id<>x.blob_id || player_id<>x.player_id}, player_blobs), player_id)
+  }
+}

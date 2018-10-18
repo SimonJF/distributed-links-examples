@@ -1,0 +1,353 @@
+open Util.Lists
+open Util.Conversions
+open Util.Colour
+
+fun total_player_mass(player) {
+    lsFoldLeft(fun(x, y) {x + y.mass}, 0, player.blobs)
+}
+
+fun highest_mass_player(max_mass_player, dict) {
+    switch (lsEmpty(dict)) {
+        case true -> max_mass_player
+        case false -> {
+            var curr_player = lsHead(dict).2;
+            if (total_player_mass(max_mass_player) > total_player_mass(curr_player))
+                highest_mass_player(max_mass_player, lsTail(dict))
+            else
+                highest_mass_player(curr_player, lsTail(dict))
+        }
+    }
+}
+########
+
+var pi = 3.141593;
+var state_node_id = "state_node";
+
+fun floatAbs(a: Float) {
+    if (a >= 0.0) a else -.a
+}
+
+fun store_int(name: String, value: Int) {
+    var state_node = getNodeById(state_node_id);
+    ignore(domSetAttributeFromRef(state_node, name, itos(value)))
+}
+
+fun get_int(name: String) {
+    var state_node = getNodeById(state_node_id);
+    if (domHasAttribute(state_node, name))
+        Just(stringToInt(domGetAttributeFromRef(state_node, name)))
+    else
+        Nothing
+}
+
+
+########################################################################
+
+typename Input = [| Key: (Int, Int) | Cursor: (Int, Int) |];
+typename Blob = (id: Int, x: Float, y: Float, mass: Int, split_pos: (Float, Float));
+typename PlayerState = (name: String, colour: (String, String), blobs: [Blob]);
+typename ScreenState = (x: Float, y: Float, scale: Float);
+typename FoodState = (pos: [(Float, Float)], colour: [String]);
+typename GameState = (screen: ScreenState, players: [(Int, PlayerState)], food: FoodState);
+typename BlobIds = (player_id:Int, blob_id:Int, mass_inc:Int);
+typename PlayerUpdateInfo = (state: PlayerState, kill_blobs: [BlobIds], eaten_blobs: [BlobIds]);
+
+typename ClientChannel = [&| UpdatePlayers: !(Int,Maybe(PlayerState),[BlobIds],[BlobIds]) . ?([(Int,PlayerState)]).End,
+                              Navigate: ?Input.End |&];
+typename UpdatePlayerChannel = [&| Update : ![BlobIds]. ![BlobIds] . ?PlayerUpdateInfo . ![(Int, PlayerState)] . UpdatePlayerChannel,
+                                   Died :?(Int, [BlobIds]) . End |&];
+typename InitiateGame = !Int . ?PlayerState . UpdatePlayerChannel;
+
+fun random_colour_player(s: Float, v: Float) {
+    var grc = 0.618033988749895;
+    var gr = (random() +. grc);
+    var h = if (gr > 1.0) gr -. 1.0 else gr;
+    (random_colour(h, s -. 0.2, v +. 0.2), random_colour(h, s, v))
+}
+
+fun clear(ctx) {
+    jsClearRect(ctx, 0.0, 0.0, jsCanvasWidth(ctx), jsCanvasHeight(ctx))
+}
+
+fun player_radius(mass) {
+    10.0 *. sqrt(itof(mass)) /. pi
+}
+
+fun euclidean_dist((x1, y1), (x2, y2)) {
+    sqrt( (x1 -. x2) ^. 2.0 +. (y1 -. y2) ^. 2.0 )
+}
+
+fun centre_of_mass(blobs: [Blob]) {
+    if (length(blobs) == 1)
+        (hd(blobs).x, hd(blobs).y)
+    else {
+        var x_com = fold_left(fun(a,b) {a +. b.x}, 0.0, blobs) /. itof(length(blobs));
+        var y_com = fold_left(fun(a,b) {a +. b.y}, 0.0, blobs) /. itof(length(blobs));
+        (x_com, y_com)
+    }
+}
+
+
+### GAME CONSTANTS
+var logging = false;
+
+var left_key_code = 37;
+var up_key_code = 38;
+var right_key_code = 39;
+var down_key_code = 40;
+var m_key_code = 77;
+
+var canvas1 = "canvas1";
+var canvas2 = "canvas2";
+
+var gameWidth = 2000;
+var gameHeight = 2000;
+var screenWidth = 800;
+var screenHeight = 600;
+var screenWidthFloat = itof(screenWidth);
+var screenHeightFloat = itof(screenHeight);
+var x_offset = screenWidthFloat /. 2.0;
+var y_offset = screenHeightFloat /. 2.0;
+var grid_lines_distance = 40;
+
+var step = 5.0;
+var base_velocity = 50.0;
+var base_food_count = 450;
+var food_radius = 10.0;
+var base_player_mass = 20;
+
+sig initial_game_state: (String, Int) ~> GameState
+fun initial_game_state(player_name, player_id) {
+    fun initialize_food(gameWidth, gameHeight, food_count) {
+        var range = lsRange(0, food_count);
+        var positions = lsZip(lsMap(fun(x) {itof(gameWidth) *. random()}, range),
+                              lsMap(fun(x) {itof(gameHeight) *. random()}, range));
+        var colour = lsMap(fun(x) {random_colour(-.1.0, 0.8, 0.9)}, range);
+        (pos=positions, colour=colour): FoodState
+    }
+    var screen_state = (x=0.0, y=0.0, scale=0.0): ScreenState;
+    var player_state = (name=player_name, colour=random_colour_player(0.95, 0.7),
+                        blobs=[(id=1, x=1000.0, y=1000.0, mass=base_player_mass,
+                        split_pos=(-.1.0,-.1.0))]):PlayerState;
+    var players = lsDictAdd(player_id, player_state, lsNilF());
+    var food_state = initialize_food(gameWidth, gameHeight, base_food_count);
+    (screen=screen_state, players=players, food=food_state):GameState
+}
+
+fun get_scale(player) {
+    var mass = hd(player.blobs).mass;
+    1.0 /. (1.0 +. 0.01 *. sqrt(itof(mass - base_player_mass)))
+}
+
+# the base velocity of the heaviest blob
+fun player_velocity(blobs) {
+    var masses = map(fun(x) { x.mass }, blobs);
+    var highest_mass = fold_left(fun(x, y) { if (x > y) x else y}, 0, masses);
+    base_velocity /. sqrt(itof(highest_mass))
+}
+
+### GAME LOGIC
+fun split_player(player: PlayerState, cursor: (Int, Int)) {
+    var split_blobs = filter(fun(x) {x.mass >= 40}, player.blobs);
+    if (empty(split_blobs))
+        player
+    else {
+        var (x_com, y_com) = centre_of_mass(player.blobs);
+        var split_pos = (x_com -. x_offset +. itof(cursor.1), y_com -. y_offset +. itof(cursor.2));
+        var non_split_blobs = filter(fun(x) {x.mass < 40}, player.blobs);
+        var blob_count = length(player.blobs);
+        var dup_blobs = map(fun(blob){ (id=blob_count+blob.id, x=blob.x, y=blob.y, mass=blob.mass/2, split_pos=split_pos): Blob}, split_blobs);
+        var original_blobs = map(fun(blob){ (blob with mass= if (even(blob.mass)) blob.mass/2 else blob.mass/2 + 1): Blob}, split_blobs);
+        (player with blobs=concat([non_split_blobs, original_blobs, dup_blobs])): PlayerState
+    }
+}
+
+fun compute_player_position(player, cursor) {
+
+    fun blob_overlap(curr_blob, blobs) {
+        switch (empty(blobs)) {
+            case true -> false
+            case false -> {
+                var other_blob = hd(blobs);
+                var dist = euclidean_dist((curr_blob.x, curr_blob.y), (other_blob.x, other_blob.y));
+                if (dist == 0.0 && curr_blob.mass == other_blob.mass)
+                    blob_overlap(curr_blob, tl(blobs))
+                else if (dist < player_radius(curr_blob.mass) +. player_radius(other_blob.mass))
+                    true
+                else
+                    blob_overlap(curr_blob, tl(blobs))
+            }
+        }
+    }
+
+    var (x_com, y_com) = centre_of_mass(player.blobs);
+    var v = player_velocity(player.blobs);
+    fun compute_blob_position(blobs: [Blob]) {
+        switch(empty(blobs)) {
+            case true -> []
+            case false -> {
+                var blob = hd(blobs);
+                if (blob.split_pos == (-.1.0,-.1.0)) {
+                    # normalised (wrt screen dimensions) difference in dtsance between player and cursor position
+                    var delta_x_norm = 2.0 *. (x_offset -. x_com +. blob.x -. itof(cursor.1)) /. screenWidthFloat;
+                    var delta_y_norm = 2.0 *. (y_offset -. y_com +. blob.y -. itof(cursor.2)) /. screenHeightFloat;
+                    var dir_x = if (delta_x_norm > 0.0) -.1.0 else 1.0;
+                    var dir_y = if (delta_y_norm > 0.0) -.1.0 else 1.0;
+
+                    if (delta_x_norm == 0.0 && delta_y_norm == 0.0)
+                        blob :: compute_blob_position(tl(blobs))
+                    else {
+                        # compute velocity components depending on ratio of deltas so that total velocity remains constant
+                        var delta_ratio = if (delta_y_norm == 0.0)
+                                            1.0
+                                          else
+                                            floatAbs(delta_x_norm) /. floatAbs(delta_y_norm);
+                        var delta_y_p = sqrt( (v ^. 2.0) /. (delta_ratio ^. 2.0 +. 1.0) );
+                        var delta_x_p = delta_y_p *. delta_ratio;
+
+                        var x_p = blob.x +. dir_x *. delta_x_p;
+                        var y_p = blob.y +. dir_y *. delta_y_p;
+                        # don't update if blob touches other blobs
+                        var (x_p, y_p) = if (blob_overlap(blob, blobs))
+                            (blob.x +. 0.5 *. dir_x *. delta_x_p, blob.y +. 0.5 *. dir_y *. delta_y_p)
+                        else (x_p, y_p);
+
+                        # don't update if blob is at borders
+                        var x_new = if (x_p < 0.0) 0.0 else if (x_p > itof(gameWidth)) itof(gameWidth) else x_p;
+                        var y_new = if (y_p < 0.0) 0.0 else if (y_p > itof(gameHeight)) itof(gameHeight) else y_p;
+
+                        ((blob with x=x_new, y=y_new) :: compute_blob_position(tl(blobs)))
+                    }
+                } else {
+                    ((blob with x=(blob.split_pos).1, y=(blob.split_pos).2, split_pos=(-.1.0,-.1.0)) :: compute_blob_position(tl(blobs)))
+                }
+            }
+        }
+    }
+
+    (name=player.name, colour=player.colour,
+     blobs=compute_blob_position(player.blobs)): PlayerState
+}
+
+fun update_food(player_id, state: GameState) {
+
+    fun update_blob_food(blobs: [Blob], zipped_food) {
+        switch (empty(blobs)) {
+            case true -> (blobs, zipped_food)
+            case false -> {
+                var blob = hd(blobs);
+                var blob_pos = (blob.x, blob.y);
+                var zipped_food_p = lsFilter( fun(x) { euclidean_dist(x.1, blob_pos) > player_radius(blob.mass) }, zipped_food);
+                var blob_p = (blob with mass=blob.mass - lsLength(zipped_food_p) + lsLength(zipped_food)): Blob;
+                var (next_blobs, next_food) = update_blob_food(tl(blobs), zipped_food_p);
+                (blob_p :: next_blobs, next_food)
+            }
+        }
+    }
+
+    var player_maybe = lsDictLookup(player_id, state.players);
+    if (isJust(player_maybe)) {
+        var player = fromJust(player_maybe);
+        var (blobs_p, zipped_food_p) = update_blob_food(player.blobs, lsZip(state.food.pos, state.food.colour));
+        var (food_pos_p, food_colour_p) = lsUnzip(zipped_food_p);
+
+        # nondeterministically replenish eaten food with increasing probability as
+        # food amount decreases
+        var food_p =
+            if (random() < 1.0 -. itof(lsLength(food_pos_p)) /. itof(base_food_count))
+                (pos=lsCons((itof(gameWidth) *. random(), itof(gameHeight) *. random()), food_pos_p),
+                 colour=lsCons(random_colour(-.1.0, 0.8, 0.9), food_colour_p))
+            else
+                (pos=food_pos_p, colour=food_colour_p);
+        var player_p = (colour=player.colour, name=player.name, blobs=blobs_p): PlayerState;
+        var players_p = lsDictAdd(player_id, player_p, state.players);
+        (players=players_p, screen=state.screen, food=food_p): GameState
+    } else
+        state
+}
+
+fun update_players(player_id, player:PlayerState, players) {
+    fun blob_eat_blob(reverse, curr_blob)(other_blob) {
+        if (itof(curr_blob.mass) *. 1.0 > itof(other_blob.mass) &&
+            (euclidean_dist((curr_blob.x, curr_blob.y), (other_blob.x, other_blob.y)) < player_radius(curr_blob.mass))) {
+              not(reverse)
+            }
+        else
+          reverse
+    }
+
+    fun eaten(my_blob)(other_blob) {
+      (itof(other_blob.mass) *. 1.0 > itof(my_blob.mass)) &&
+      (euclidean_dist((my_blob.x, my_blob.y), (other_blob.x, other_blob.y)) < player_radius(other_blob.mass))
+    }
+
+    fun update_curr_blob(blob:Blob, players) {
+        switch (lsEmpty(players)) {
+            case true -> (blob, players, [], [])
+            case false -> {
+                if (not(player_id == lsHead(players).1)) {
+                    var other_player = lsHead(players).2;
+                    # get eaten blobs and their commulative mass
+                    var eaten_blobs = filter(blob_eat_blob(false, blob), other_player.blobs);
+                    var eaten_blobs_ids = map(fun(x) {(player_id=lsHead(players).1, blob_id=x.id, mass_inc=0)}, eaten_blobs);
+                    var eaten_blobs_mass = sum(map(fun(x) {x.mass}, eaten_blobs));
+
+                    # update blob
+                    var blob_p = (blob with mass=blob.mass+eaten_blobs_mass);
+                    # id(s) of blobs that potentially ate player's blob in form (player_id, blob_id)
+                    var killer_blobs = map(fun(x) {(player_id=lsHead(players).1, blob_id=x.id, mass_inc=blob_p.mass)},
+                                           filter(eaten(blob), other_player.blobs));
+                    # get resolts for the remaining blobs
+                    var (next_blob, next_players, eaten_blobs_tl, killer_blobs_tl) = update_curr_blob(blob_p, lsTail(players));
+
+                    # update other player
+                    var other_player_blobs_p = filter(blob_eat_blob(true, blob), other_player.blobs);
+                    var other_player_p = (other_player with blobs=other_player_blobs_p):PlayerState;
+
+                    (next_blob, lsCons((lsHead(players).1, other_player_p), next_players), concat([eaten_blobs_ids, eaten_blobs_tl]), concat([killer_blobs, killer_blobs_tl]))
+                } else
+                    update_curr_blob(blob, lsTail(players))
+            }
+        }
+    }
+
+    fun update_curr_player(blobs, players) {
+        switch(empty(blobs)) {
+            case true -> ([], players, [], [])
+            case false -> {
+                var (blob_p, players_p, eaten_blobs, killer_blobs) = update_curr_blob(hd(blobs), players);
+                var (next_blobs, next_players, eaten_blobs_tl, killer_blobs_tl) = update_curr_player(tl(blobs), players_p);
+                var blobs_p = if (empty(killer_blobs)) blob_p::next_blobs else next_blobs;
+                (blobs_p, next_players, concat([eaten_blobs, eaten_blobs_tl]), concat([killer_blobs, killer_blobs_tl]))
+            }
+        }
+    }
+
+    var (blobs_p, players_p, eaten_blobs, killer_blobs) = update_curr_player(player.blobs, players);
+    var players_p = lsDictAdd(player_id, (player with blobs=blobs_p): PlayerState, players_p);
+    var players_p = lsFilter(fun(x) {length((x.2).blobs) > 0}, players_p);
+    (players_p, eaten_blobs, killer_blobs)
+}
+
+fun update_logic(state: GameState, player_id: Int, in_event: Input) {
+    var state_new = update_food(player_id, state);
+    var player_state_maybe = lsDictLookup(player_id, state_new.players);
+    if (isJust(player_state_maybe)) {
+        var (player_state: PlayerState) = fromJust(player_state_maybe);
+        switch(in_event) {
+            case Cursor(x,y) -> {
+                var blobs = player_state.blobs;
+                var player_state_p = compute_player_position(player_state, (x,y));
+                var (players, eaten_blobs, killer_blobs) = update_players(player_id, player_state_p, state_new.players);
+                ((state_new with players=players):GameState, eaten_blobs, killer_blobs)
+            }
+            case Key(x,y) -> {
+                var player_state_p = split_player(player_state, (x, y));
+                var (players, eaten_blobs, killer_blobs) = update_players(player_id, player_state_p, state_new.players);
+                ((state_new with players=players): GameState, [], [])
+            }
+        }
+    } else {
+      (state, [], [])
+    }
+}

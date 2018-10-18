@@ -1,0 +1,175 @@
+open Util.Lists
+open Util.Conversions
+open Util.Colour
+open Render
+open Logic
+
+### EVENT LISTENERS
+fun on_mousemove(e) {
+    var cursor = (getPageX(e), getPageY(e));
+    store_int("cursor_x", cursor.1);
+    store_int("cursor_y", cursor.2);
+}
+
+####
+var game_access_point = new();
+var client_access_point = new();
+
+fun playing(game_state) {
+    var (s: (Game)) = accept(game_access_point);
+    <| offer s {
+        case Move -> {
+            var (player_id, s) = receive(s);
+            var (input, s) = receive(s);
+            var game_state_new = update_logic(game_state, player_id, input);
+            var in_game = if (isJust(lsDictLookup(player_id, game_state.players))) true else false;
+            ignore(send(game_state_new, (send(true, s))));
+            playing(game_state_new)
+        }
+        case AddPlayer -> {
+            var (player_id, s) = receive(s);
+            var (player_name, s) = receive(s);
+            var new_player_state = (name=player_name, colour=random_colour_player(0.95, 0.7),
+                                    blobs=[(x=1000.0, y=1000.0, mass=base_player_mass, split_pos=(-.1.0,-.1.0))]): PlayerState;
+            var game_state_new = (screen=game_state.screen, food=game_state.food,
+                                  players=lsDictAdd(player_id, new_player_state, game_state.players));
+            ignore(send(game_state_new, s));
+            playing(game_state_new)
+        }
+    } |>
+}
+
+sig get_initial_game_state: ((~InitiateGame), String) ~> GameState
+fun get_initial_game_state(s, name) {
+    <| Start s.s[name].s(state).{state} |>
+}
+
+fun initialize(player_name) client {
+    replaceNode(<div id="container" tabindex="1">
+                    <canvas id="{canvas1}" height="{itos(screenHeight)}" width="{itos(screenWidth)}"/>
+                    <canvas id="{canvas2}" height="{itos(screenHeight)}" width="{itos(screenWidth)}"/>
+                </div>,
+                getNodeById("container"));
+
+    var game_state_i = get_initial_game_state(knife(initial_game_state), player_name);
+    var _ = spawn { playing(game_state_i)};
+
+    fun on_key_down(e) {
+        if (getCharCode(e) == 81) {  #that's Q
+            var _ = spawn {
+                var (c: (~Client)) = request(client_access_point);
+                fun other_play(player_id, game_state: GameState, in_game: Bool) {
+                    if (in_game) {
+                        var (cp: (~Game)) = request(game_access_point);
+                        <| Move cp.cp[player_id].
+                                   cp[ Cursor(ftoi(itof(screenWidth) *. random()),
+                                              ftoi(itof(screenHeight) *. random())): Input].
+                                   cp(in_game).cp(new_game_state).{ (other_play(player_id, new_game_state, in_game)) } |>
+                    } else
+                        other_play(player_id, game_state, in_game)
+                }
+                <| NewPlayer c.c["bot"].c(player_id).c(game_state).{ ignore(spawn{(other_play(player_id, game_state, true))}) } |>
+            };
+            ()
+        } else if (getCharCode(e) == 32) { #that's space
+            ignore(spawn {
+                var (c: (~Client)) = request(client_access_point);
+                var (x,y) = (fromJust(get_int("cursor_x")), fromJust(get_int("cursor_y")));  # not safe
+                <| InputMsg c.c[1].c[Key(x,y)].{()} |> })
+        } else ()
+    }
+
+    jsSetOnEvent(getNodeById("container"), "mousemove", on_mousemove, true);
+    jsSetOnKeyDown(getNodeById("container"), on_key_down);
+
+    var _ = spawn {
+        fun play(game_state: GameState, player_count: Int) {
+            var (c: (~Game)) = request(game_access_point);
+            var (s: Client) = accept(client_access_point);
+            <| offer s {
+                case InputMsg -> s(player_id).s(input).
+                    Move c.c[player_id].c[input].c(in_game).c(new_game_state).{ if(in_game) draw(player_id, new_game_state) else ();
+                                                                               (play(new_game_state, player_count))}
+                case NewPlayer -> s(name).s[player_count+1].s[game_state].
+                    AddPlayer c.c[player_count+1].c[name].c(new_game_state).{ (play(new_game_state, player_count+1)) }
+            } |>
+        }
+
+        play(game_state_i, 1)
+    };
+
+    fun master_loop() {
+        var start_time = getTime(event);
+        fun game_loop(prev_time: Int) {
+            var curr_time = getTime(event);
+            if (curr_time - prev_time > 30) {
+                var cursor =
+                    switch ((get_int("cursor_x"), get_int("cursor_y"))) {
+                        case (Just(x), Just(y)) -> Cursor(x, y)
+                        case (Nothing, Nothing) -> Cursor(gameWidth/2, gameHeight/2)
+                        case (Just(x), Nothing) -> Cursor(x, gameHeight/2)
+                        case (Nothing, Just(y)) -> Cursor(gameWidth/2, y)
+                    };
+                var (c: (~Client)) = request(client_access_point);
+                <| InputMsg c.c[1].c[cursor].{game_loop(curr_time)} |>
+            } else {
+                game_loop(prev_time)
+            }
+        }
+        game_loop(start_time)
+    }
+
+    var _ = spawn { master_loop() };
+    ()
+}
+
+fun main() {
+    page
+        <html>
+            <head>
+                <title>Agar.io</title>
+                <style>
+                    body {{
+                        margin: 0;
+                    }}
+                    #{stringToXml(canvas1)} {{
+                        display: none;
+                        position: absolute;
+                        top: 0px;
+                        left: 0px;
+                    }}
+                    #{stringToXml(canvas2)} {{
+                        display: block;
+                        position: absolute;
+                        top: 0px;
+                        left: 0px;
+                    }}
+                    #{stringToXml("container")} {{
+                        position: relative;
+                        width: {stringToXml(itos(screenWidth))}px;
+                        height: {stringToXml(itos(screenHeight))}px;
+                    }}
+                    #name_form {{
+                        position: relative;
+                        left: {stringToXml(itos(screenWidth/2))}px;
+                        top: {stringToXml(itos(screenHeight/2))}px;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div id="container">
+                    <div id="name_form">
+                        Agar.io
+                        <form l:onsubmit="{initialize(player_name)}">
+                            <input type="text" l:name="player_name" autofocus="autofocus"/>
+                        </form>
+                    </div>
+                </div>
+
+                <div id="{state_node_id}" style="display:none;" ></div>
+
+            </body>
+        </html>
+}
+
+main()

@@ -1,0 +1,88 @@
+open Util.Lists
+open Render
+open Logic
+open MainAppClient
+open ServerLogic
+
+# keeps truck of all players, their states and channel on which the server
+# communicates with them
+fun players_manager(players, kill_blobs, eaten_blobs, new_id) {
+  receive {
+    case Update(player_id, info:PlayerUpdateInfo, pid) ->
+      var new_players = dictUpdatePlayer(player_id, info.state, players);
+      var new_players = updatePlayerBlobs(info.eaten_blobs, new_players);
+      pid ! new_players;
+      players_manager(new_players, concat([info.kill_blobs, kill_blobs]),
+                      concat([info.eaten_blobs, eaten_blobs]), new_id)
+    case Add(player_id:Int, player:PlayerState) ->
+      players_manager(((player_id, player))::players, kill_blobs, eaten_blobs, new_id)
+    case GeneratePlayerId(pid) ->
+      pid ! new_id;
+      players_manager(players, kill_blobs, eaten_blobs, new_id+1)
+    case DeletePlayer(player_id) ->
+      var new_players = filter(fun(x) {x.1<>player_id}, players);
+      players_manager(new_players, kill_blobs, eaten_blobs, new_id);
+    case InflatePlayers(kill_blobs_new:[BlobIds]) ->
+      players_manager(players, concat([kill_blobs_new, kill_blobs]), eaten_blobs, new_id)
+    case GetSpecialPlayers(player_id, pid) ->
+      var to_inflate_send = filter(fun(x){x.player_id==player_id}, kill_blobs);
+      var to_inflate_new = filter(fun(x){x.player_id<>player_id}, kill_blobs);
+      var eaten_send = filter(fun(x) {x.player_id==player_id}, eaten_blobs);
+      var eaten_new = filter(fun(x) {x.player_id<>player_id}, eaten_blobs);
+      pid ! (to_inflate_send, eaten_send);
+      players_manager(players, to_inflate_new, eaten_new, new_id)
+  }
+}
+
+fun handle_pings(player_id, channel:UpdatePlayerChannel, manager) {
+  offer(channel) {
+    case Update(channel) ->
+      var (to_inflate, eaten) =
+        spawnWait { manager ! GetSpecialPlayers(player_id, self());
+                    receive { case x -> x }};
+      var channel = send(to_inflate, channel);
+      var channel = send(eaten, channel);
+      var (player_info:PlayerUpdateInfo, channel) = receive(channel); # handle new eaten blobs (need to be done at the server!!!)
+      var players = spawnWait { manager ! Update(player_id, player_info, self());
+                                receive { case x -> x }};
+      handle_pings(player_id, send(players, channel), manager)
+    case Died(channel) ->
+      var (died_info, channel) = receive(channel);
+      manager ! InflatePlayers(died_info.2:[BlobIds]);
+      manager ! DeletePlayer(died_info.1);
+  }
+}
+
+fun setup(s:InitiateGame, manager) {
+  # send new player id.
+  var player_id = spawnWait { manager ! GeneratePlayerId(self());
+                              receive { case n -> n }};
+  var s = send(player_id, s);
+
+  #  Get client's initial state. (is same for every client so should be
+  #  generated at the server. TODO: rewrite initial_game_state funtion so it
+  #  does not use pure client-side functions and can bu run on server).
+  var (player_state:PlayerState, s) = receive(s);
+  manager ! Add(player_id, player_state);
+  var _ = spawn { handle_pings(player_id, s, manager) };
+  ()
+}
+
+fun client_acceptor(ap, manager) {
+  var s = accept(ap);
+  var _ = spawn { setup(s, manager) };
+  client_acceptor(ap, manager)
+}
+
+fun main() {
+  var clientAP = new();
+  var gameManager = spawn { players_manager([], [], [], 1) };
+  var acc = spawn { client_acceptor(clientAP, gameManager) };
+  var server_time = serverTime();
+  addRoute("/", fun (_, _) { MainAppClient.mainPage(clientAP) } );
+  addStaticRoute("/css", "css", [("css", "text/css")]);
+  serveWebsockets();
+  servePages()
+}
+
+main()

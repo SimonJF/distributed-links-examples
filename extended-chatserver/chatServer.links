@@ -1,0 +1,289 @@
+open ChatSessions
+open ChatClient
+
+#helper functions:
+fun member(elem , l) {
+  switch(l) {
+    case [] -> false
+    case (x::xs) -> x == elem || member(elem, xs)
+  }
+}
+
+## clientHandler loop: Reads incoming requests from the client, dispatches
+## each command to the perRoomLoop which will broadcast to other room members.
+# Alas, we can't make this an inner function at the moment since we need a type
+# annotation, and type annotations are broken for inner functions at the moment
+# ^^ not applicable anymore?
+fun clientHandlerLoop(nick, clientToServerChan, loopPid) {
+  offer(clientToServerChan) {
+    case ChatMessage(clientToServerChan) ->
+      var (msg, clientToServerChan) = receive(clientToServerChan);
+      loopPid ! BroadcastMessage(nick, msg);
+      clientHandlerLoop(nick, clientToServerChan, loopPid)
+    case ChangeTopic(clientToServerChan) ->
+      var (newTopic, clientToServerChan) = receive(clientToServerChan);
+      loopPid ! BroadcastChangeTopic(newTopic);
+      clientHandlerLoop(nick, clientToServerChan, loopPid)
+    case Leaving(clientToServerChan) ->
+      ()
+  }
+}
+
+# Process that is spawned to handle messages from the chat client.
+fun clientHandler(nick, chatServerRecvEnd, serverToClientRecvEnd, loopPid) {
+  # Get the current topic and nicks
+  var (room, topic, users) =
+    spawnWait { loopPid ! GetRoomState(self()) ; receive { case n -> n }};
+
+  var is_mod = users == [];
+  # if this is the first user, make him moderator
+  var moderatorChannelSendEnd = fork( fun (moderatorChannelRecEnd) {
+    moderatorHandler(moderatorChannelRecEnd, loopPid) });
+
+  # Send topic, nicks, and outgoing channel
+  var chatServerRecvEnd =
+    send((room, topic, is_mod, serverToClientRecvEnd, moderatorChannelSendEnd),
+    chatServerRecvEnd);
+
+   clientHandlerLoop(nick, chatServerRecvEnd, loopPid)
+}
+
+# Messages directed form the server to the client
+fun clientSendHandler(s) {
+  receive {
+    case DeliverMessage(nick, msg) ->
+      var s = select IncomingChatMessage s;
+      var s = send((nick, msg), s);
+      clientSendHandler(s)
+    case DeliverNewUser(nick) ->
+      var s = select NewUser s;
+      var s = send(nick, s);
+      clientSendHandler(s)
+    case DeliverNewTopic(topic) ->
+      var s = select NewTopic s;
+      var s = send(topic, s);
+      clientSendHandler(s)
+    case DeliverUserLeft(nick) ->
+      var s = select UserLeft s;
+      var s = send(nick, s);
+      clientSendHandler(s)
+    case DeliverUserMuted(nick) ->
+      var s = select UserMuted s;
+      var s = send(nick, s);
+      clientSendHandler(s)
+    case DeliverUserUnmuted(nick) ->
+      var s = select UserUnmuted s;
+      var s = send(nick, s);
+      clientSendHandler(s)
+    case DeliverLeave() ->
+      select Leave s
+    case DeliverBecameModerator(nicks) ->
+      var s = select MakeModerator s;
+      var s = send(nicks, s);
+      clientSendHandler(s)
+  }
+}
+
+# A loop providing the client with moderator capabilities
+fun moderatorHandler(channel, loopPid) {
+  offer(channel) {
+    case RemoveUser(channel) ->
+      var (nick, channel) = receive(channel);
+      loopPid ! RemoveUser(nick);
+      moderatorHandler(channel, loopPid)
+    case MuteUser(channel) ->
+      var (nick, channel) = receive(channel);
+      loopPid ! MuteUser(nick);
+      moderatorHandler(channel, loopPid)
+    case MakeModerator(channel) ->
+      var (nick, channel) = receive(channel);
+      loopPid ! MakeModerator(nick);
+      moderatorHandler(channel, loopPid)
+  }
+}
+
+# Broadcasts a given message to the mailboxes of a list of PIDs
+fun broadcastMessage(msg, users) {
+  switch(users) {
+    case [] -> ()
+    case user :: users -> user.pid ! msg; broadcastMessage(msg, users)
+  }
+}
+
+# status : ( name:Room, topic:Topic, users:[User] )
+# user : ( nick:Nickname, pid:ClientSendHandler, isAdmin:Bool,
+#          isMuted:Bool )
+# Main server loop that handles an individual room
+fun perRoomLoop(status) server {
+  fun removeUserByName(nick, users) {
+    switch(users) {
+      case [] -> []
+      case x::xs -> if (x.nick == nick) tl(users)
+                    else hd(users)::removeUserByName(nick, xs)
+    }
+  }
+
+  fun muteUserByName(nick, users) {
+    switch(users) {
+      case [] -> []
+      case x::xs ->
+        if (x.nick == nick)
+          (x with isMuted=not(x.isMuted))::tl(users)
+        else hd(users)::muteUserByName(nick, xs)
+    }
+  }
+
+  fun makeModeratorByName(nick, users) {
+    switch(users) {
+      case [] -> []
+      case x::xs ->
+        if (x.nick == nick) (x with isAdmin=true)::tl(users)
+        else hd(users)::makeModeratorByName(nick, xs)
+    }
+  }
+
+  fun isMuted(nick, users) {
+    switch(users) {
+      case [] -> true
+      case x::xs -> if (x.nick == nick) x.isMuted
+                    else isMuted(nick, xs)
+    }
+  }
+
+  receive {
+    case BroadcastMessage(nick, msg) ->
+      var users = if (isMuted(nick, status.users)) []
+                  else status.users;
+      broadcastMessage(DeliverMessage(nick, msg), users);
+      perRoomLoop(status)
+    case BroadcastChangeTopic(newTopic) ->
+      broadcastMessage(DeliverNewTopic(newTopic), status.users);
+      perRoomLoop((status with topic=newTopic))
+    case NewClient(nick, pid) ->
+      broadcastMessage(DeliverNewUser(nick), status.users);
+      var new_user =
+        (nick=nick, pid=pid, isAdmin=false, isMuted=false);
+      var new_users = new_user::(status.users);
+      perRoomLoop((status with users=new_users))
+    case GetRoomState(pid) ->
+      pid ! (status.name, status.topic, status.users);
+      perRoomLoop(status)
+    case RemoveUser(nick) ->
+      var matchingUsers = filter(fun (x) { x.nick==nick }, status.users);
+      if (matchingUsers == [])
+        perRoomLoop(status)
+      else {
+        var users = filter(fun (x) { x.nick<>nick }, status.users);
+        broadcastMessage(DeliverLeave(), matchingUsers);
+        broadcastMessage(DeliverUserLeft(nick), users);
+        perRoomLoop((status with users=users))
+      }
+    case MuteUser(nick) ->
+      var is_muted = filter( fun(x){ x.nick==nick && x.isMuted },
+                                     status.users) == [];
+      if (is_muted)
+        broadcastMessage(DeliverUserMuted(nick), status.users)
+      else
+        broadcastMessage(DeliverUserUnmuted(nick), status.users);
+      var users = muteUserByName(nick, status.users);
+      perRoomLoop((status with users=users))
+    case MakeModerator(nick) ->
+      var nonModeratorNicks =
+        filter( fun(x) { x.nick==nick && x.isAdmin==false }, status.users );
+      if (nonModeratorNicks == [])
+        perRoomLoop(status)
+      else {
+        var userNames = for (x<-status.users) { [x.nick] };
+        broadcastMessage(DeliverBecameModerator(userNames), nonModeratorNicks);
+        var users = makeModeratorByName(nick, status.users);
+        perRoomLoop((status with users=users))
+      }
+  }
+}
+
+fun handleNickname(s, loopPid) {
+  # Get the name and incoming message channel of the new client
+  var (name, s) = receive(s);
+
+  # Fork off the client handler,
+  var serverToClientSendEnd = linFork(
+    linfun (serverToClientRecvEnd) {
+     clientHandler(name, s, serverToClientRecvEnd, loopPid)
+  });
+
+  # Fork off client send handler
+  var clientSendHandlerPid = spawn { clientSendHandler(serverToClientSendEnd) };
+
+  # Register with the main loop, and recurse
+  loopPid ! NewClient(name, clientSendHandlerPid)
+}
+
+# Send all existing rooms to the client
+# The client then either picks one of the existing rooms or cretes a new one,
+# and sends its choice back to the client.
+# The server then allocates a handle for that particular room, for client
+# to operate on
+fun handleRoom(roomsSenderEnd, loopPid) server {
+  # get all available rooms
+  var rooms = spawnWait { loopPid ! GetRooms(self()) ; receive { case n -> n }};
+  # send the rooms to the client.
+  var s = send(rooms, roomsSenderEnd);
+  # get the room selection from the client
+  var (r, s) = receive(s);
+  var room_handle =
+    spawnWait { loopPid ! GetRoomHandler(r, self()); receive { case n -> n }};
+  handleNickname(s, room_handle)
+}
+
+fun clientAcceptor(ap, loopPid) server {
+  # Accept a new client
+  var s = accept(ap);
+  var _ = spawn { handleRoom(s, loopPid) };
+  clientAcceptor(ap, loopPid)
+}
+
+# keeps track of all rooms (by name) and their corresponding handlers
+fun roomsLoop(rooms, handlers) server {
+  fun getRoomHandler(room, rooms, handlers) {
+    fun getNewRoomHandler() {
+      var room_status = (name=room, topic=Topic("hello"), users=[]);
+      spawn { perRoomLoop(room_status) }
+    }
+    switch(rooms) {
+      # if no handler found, its a new room so create a new handler
+      case [] -> (getNewRoomHandler(), true)
+      case x::xs -> if (x == room) (hd(handlers), false)
+                    else getRoomHandler(room, xs, tl(handlers))
+    }
+  }
+
+  receive {
+    case AddRoom(room, handler) ->
+      roomsLoop(room::rooms, handler::handlers)
+    case RemoveRoom(handler) ->
+      # TODO
+      roomsLoop(rooms, handler)
+    case GetRooms(pid) ->
+      pid ! rooms;
+      roomsLoop(rooms, handlers)
+    case GetRoomHandler(room, pid) ->
+      var (handler, new) = getRoomHandler(room, rooms, handlers);
+      pid ! handler;
+      if (new) roomsLoop(room::rooms, handler::handlers)
+      else roomsLoop(rooms, handlers)
+  }
+}
+
+fun main() {
+  var clientAP = new();
+  # spawn loop that keeps track of existing rooms and their handlers
+  var loopPid = spawn { roomsLoop([], []) };
+
+  var _ = spawn { clientAcceptor(clientAP, loopPid) };
+  addRoute("/", fun (_, _) { ChatClient.mainPage(clientAP) } );
+  addStaticRoute("/css", "css", [("css", "text/css")]);
+  serveWebsockets();
+  servePages()
+}
+
+main()

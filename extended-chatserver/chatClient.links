@@ -1,0 +1,398 @@
+open ChatSessions
+
+module DomFunctions {
+  var nickname_box_id = "name_box";
+  var chat_box_id = "chat_box";
+
+  fun getInputContents(dom_id) {
+    var textNode = getNodeById(dom_id);
+    domGetPropertyFromRef(textNode, "value")
+  }
+
+  fun clearInput(dom_id) {
+    var textNode = getNodeById(dom_id);
+    var _ = domSetPropertyFromRef(textNode, "value", "");
+    ()
+  }
+}
+
+open DomFunctions
+
+fun mainPage(ap) {
+  # loop that receives input from
+  # 1. the client (moderator) about removing and muting clients
+  # 2. the server about users entering/leaving rooms so they can be removed
+  #    from the dropdown selection box
+  fun moderatorHandler(channel) {
+    fun makeOption(name) {
+      var to_add = <#><option id="/id_placeholder">
+                   {stringToXml(name)}</option></#>;
+      appendChildren(to_add, getNodeById("clientSelect"));
+      var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
+                                     "value", name);
+      var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
+                                     "id", "/moderator"^^name);
+      ()
+    }
+
+    fun makeOptions(names) {
+      switch(names) {
+        case [] -> ()
+        case x::xs -> makeOption(x); makeOptions(xs)
+      }
+    }
+
+    receive {
+      case NewUser(name) ->
+        makeOption(name);
+        moderatorHandler(channel)
+      case UserLeft(name) ->
+        removeNode(getNodeById("/moderator"^^name));
+        moderatorHandler(channel)
+      case Remove() ->
+        var selectedUser = getInputContents("clientSelect");
+        if (selectedUser == "") {
+          print("No option has been selected");
+          moderatorHandler(channel)
+        } else {
+          var channel = send(Nickname(selectedUser), select RemoveUser channel);
+          moderatorHandler(channel)
+        }
+      case Mute() ->
+        var selectedUser = getInputContents("clientSelect");
+        if (selectedUser == "") {
+          print("No option has been selected");
+          moderatorHandler(channel)
+        } else {
+          var channel = send(Nickname(selectedUser), select MuteUser channel);
+          moderatorHandler(channel)
+        }
+      case MakeModerator() ->
+        var selectedUser = getInputContents("clientSelect");
+        if (selectedUser == "") {
+          print("No option has been selected");
+          moderatorHandler(channel)
+        } else {
+          var channel = send(Nickname(selectedUser),
+                        select MakeModerator channel);
+          moderatorHandler(channel)
+        }
+      case MakeMeModerator(names) ->
+        print("Became a moderator");
+        replaceChildren(makeAdminBox(self()),
+                        getNodeById("adminBox_placehodler"));
+        makeOptions(names);
+        moderatorHandler(channel)
+    }
+  }
+
+
+  fun displayChatBox(room, topic, is_mod, incomingMsgChan, moderatorChan, outgoingMsgChan) {
+    var Room(roomStr) = room;
+    var Topic(topicStr) = topic;
+
+    fun addToMsgBox(xml) {
+      var msgsNode = getNodeById("msgs");
+      appendChildren(xml, msgsNode);
+      var scrollHeight = domGetPropertyFromRef(msgsNode, "scrollHeight");
+      var _ = domSetPropertyFromRef(msgsNode, "scrollTop", scrollHeight);
+      ()
+    }
+
+    fun addChatMsg(nick, msg) {
+      var to_add = <#><p><b>{stringToXml(nick)}</b>: {stringToXml(msg)}</p></#>;
+      addToMsgBox(to_add)
+    }
+
+    fun addNewUser(nick) {
+      var to_add = <#><p><b>{stringToXml(nick)}</b> just joined</p></#>;
+      addToMsgBox(to_add)
+    }
+
+    fun changeTopic(topic) {
+      var topicNode = getNodeById("topic");
+      var to_add = <#><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></#>;
+      replaceChildren(to_add, topicNode)
+    }
+
+    fun removeUser(nick) {
+      var to_add = <#><p><b>{stringToXml(nick)}</b> just left</p></#>;
+      addToMsgBox(to_add)
+    }
+
+    fun muteUser(nick) {
+      var to_add = <#><p><b>{stringToXml(nick)}</b> got muted :(</p></#>;
+      addToMsgBox(to_add)
+    }
+
+    fun unmuteUser(nick) {
+      var to_add = <#><p><b>{stringToXml(nick)}</b> got unmuted :D </p></#>;
+      addToMsgBox(to_add)
+    }
+
+
+    fun incomingMsgLoop(s, moderatorPid) {
+      offer(s) {
+        case IncomingChatMessage(s) ->
+          var ((Nickname(nick), Message(chatmsg)), s) = receive(s);
+          debug("Received incoming chat message (" ^^ chatmsg ^^ ") from (" ^^ nick ^^ ")");
+          addChatMsg(nick, chatmsg);
+          incomingMsgLoop(s, moderatorPid)
+        case NewUser(s) ->
+          var (Nickname(nick), s) = receive(s);
+          moderatorPid ! NewUser(nick);
+          addNewUser(nick);
+          incomingMsgLoop(s, moderatorPid)
+        case NewTopic(s) ->
+          var (Topic(topic), s) = receive(s);
+          changeTopic(topic);
+          incomingMsgLoop(s, moderatorPid);
+        case UserLeft(s) ->
+          var (Nickname(nick), s) = receive(s);
+          moderatorPid ! UserLeft(nick);
+          removeUser(nick); # Poor Nick
+          incomingMsgLoop(s, moderatorPid)
+        case UserMuted(s) ->
+          var (Nickname(nick), s) = receive(s);
+          muteUser(nick);
+          incomingMsgLoop(s, moderatorPid)
+        case UserUnmuted(s) ->
+          var (Nickname(nick), s) = receive(s);
+          unmuteUser(nick);
+          incomingMsgLoop(s, moderatorPid)
+        case MakeModerator(s) ->
+          var (nicks, s) = receive(s);
+          var names = for (Nickname(nameStr)<-nicks) { [nameStr] };
+          moderatorPid ! MakeMeModerator(names);
+          incomingMsgLoop(s, moderatorPid)
+        case Leave(s) ->
+          redirect("/");
+          ()
+      }
+    }
+
+    fun outgoingMsgLoop(s) {
+      fun isTopicCmd(s) {
+        (charAt(s, 0) == '/') &&
+        (strlen(s) > 8) &&
+        (strsub(s, 0, 7) == "/topic ")
+      }
+
+      fun getTopic(s) {
+        strsub(s, 7, strlen(s) - 7)
+      }
+
+      receive {
+        case str ->
+          if (isTopicCmd(str)) {
+            var s = select ChangeTopic s;
+            var s = send(Topic(getTopic(str)), s);
+            outgoingMsgLoop(s)
+          } else {
+            var s = select ChatMessage s;
+            var s = send(Message(str), s);
+            outgoingMsgLoop(s)
+          }
+      }
+    }
+
+    fun chatBox(outgoingHandlerPid) {
+      fun handleSubmit() {
+        outgoingHandlerPid ! getInputContents(chat_box_id);
+        clearInput(chat_box_id)
+      }
+
+      <#>
+        <div id="chatBox">
+          <div id="adminBox_placehodler"></div>
+          <div id="topic"><p><span class="lead"><b>Room: </b>{stringToXml(roomStr)}</span></p></div>
+          <div id="topic"><p><span class="lead"><b>Topic: </b>{stringToXml(topicStr)}</span></p></div>
+          <div id="msgs" style="overflow-y:scroll; width:100%; height:400px;"></div>
+          <div>
+            <form l:onsubmit="{handleSubmit()}">
+              <input id="chat_box" type="text" style="width:100%"></input>
+            </form>
+          </div>
+        </div>
+      </#>
+    }
+
+
+    # channel contacting client about messaging, topic changes
+    var outgoingHandler = spawnClient { outgoingMsgLoop(outgoingMsgChan) };
+
+    # loop that contacts server about user deletion/muting
+    # also keeps track of currently selection user
+    var modHandler = spawnClient { moderatorHandler(moderatorChan) };
+
+    # channel for the server to send new client/ client left updates
+    var incomingHandler =
+      spawnClient { incomingMsgLoop(incomingMsgChan, modHandler) };
+
+    # Finally, remove the name request box, put the chatbox in, and start off
+    replaceChildren(chatBox(outgoingHandler), getNodeById("main"));
+    if (is_mod) replaceChildren(makeAdminBox(modHandler),
+                                getNodeById("adminBox_placehodler"))
+    else ()
+  }
+
+  fun makeAdminBox(modHandler) {
+    <#>
+      <form id="adminForm" l:onsubmit="{()}">
+        <p>
+          <select id="clientSelect" required="required">
+            <option value="">None selected</option>
+          </select><br/>
+          <input type="submit" id="adminRemove" value="Remove"
+          l:onclick="{modHandler ! Remove() }"/>
+          <input type="submit" id="adminMute" value="Mute/Unmute"
+          l:onclick="{modHandler ! Mute() }"/>
+          <input type="submit" id="adminMakeAdmin" value="Make moderator"
+          l:onclick="{modHandler ! MakeModerator() }"/>
+        </p>
+      </form>
+    </#>
+  }
+
+  fun nameBox(channel) {
+    fun handleSubmitName(s) {
+        var nick = getInputContents(nickname_box_id);
+        clearInput(nickname_box_id);
+        var s = send(Nickname(nick), s);
+        var ((room, topic, is_mod, incomingMsgChan, moderatorChan), s) =
+          receive(s);
+        displayChatBox(room, topic, is_mod, incomingMsgChan, moderatorChan, s)
+    }
+
+    var nameHandler =
+      spawnClient { receive { case _ -> handleSubmitName(channel) } };
+    replaceNode(<#>
+                  <div id="nameBox">
+                    <p>Nickname:</p>
+                    <form l:onsubmit="{nameHandler ! ()}">
+                      <input id="name_box" type="text" autofocus="autofocus">
+                      </input>
+                    </form>
+                  </div>
+                </#>,
+                getNodeById("roomSelect"))
+  }
+
+  fun chooseRoom(ap) {
+    fun makeRoomForm(rooms, handlerFn) {
+      fun makeRadioRec(rooms) {
+            switch(rooms) {
+              case [] -> <#/>
+              case x::xs ->
+                var Room(roomStr) = x;
+                <#>
+                  <input type="radio" name="room"
+                    l:onchange="{ handlerFn ! Room(roomStr)}"/>
+                    { stringToXml(roomStr) } <br/>
+                { makeRadioRec(xs) } </#>
+            }
+          }
+      <#>
+      <form id="rooms" l:onsubmit="{ handlerFn ! Submit()}">
+          <input id="startButton" type="radio" name="room" checked="checked"
+                 l:onchange="{ handlerFn ! Room("/newRoom")}"/> New
+          <input id="newRoomText" type="text" value=""/><br/>
+            { makeRadioRec(rooms) }
+          <p>
+            <input type="submit" name="submitButton" value="Enter"/>
+          </p>
+      </form>
+      </#>
+    }
+
+    fun roomSelectLoop(s, roomStr, rooms) {
+      fun member(elem , l) {
+        switch(l) {
+          case [] -> false
+          case (x::xs) -> x == elem || member(elem, xs)
+        }
+      }
+
+      receive {
+        case Room(roomStr) ->
+          roomSelectLoop(s, roomStr, rooms)
+        # if the user wants to create a new room, extract the room name from
+        # the text field
+        case Submit() ->
+          if (roomStr == "/newRoom") {
+            var roomStr = getInputContents("newRoomText");
+            if (roomStr == "" || member(Room(roomStr), rooms))
+              roomSelectLoop(s, roomStr, rooms)
+            else
+              nameBox(send(Room(roomStr), s))
+          } else {
+            nameBox(send(Room(roomStr), s))
+          }
+        }
+    }
+
+    # keeps track of the radio button currently clicked
+    # (TODO: extract the information from DomNodes after submission)
+    # At submission, sends the roomname to the server and proceeds to name setup
+    fun doSetup(roomStr) {
+      # On the client, request from the given access point
+      var s = request(ap);
+      # Next, grab the list of rooms
+      var (rooms, s) = receive(s);
+      # Spawn the handler function
+      var roomHandler = spawnClient { roomSelectLoop(s, roomStr, rooms) };
+
+      # Next, populate the placeholder with the received rooms
+      var generated_radio_dom = makeRoomForm(rooms, roomHandler);
+      debug("about to evaluate replaceNode");
+      replaceNode(generated_radio_dom, getNodeById("room_placeholder"));
+    }
+
+    # get all available rooms from teh server and pick one via radio buttons
+    doSetup("/newRoom");
+  }
+
+  fun start() {
+    print("In start");
+    # oh dear, Simon attempts front-end webdev
+    var _ = spawnClient { chooseRoom(ap) };
+    page
+      <html>
+        <head>
+          <title>Links chat</title>
+          <link href="http://fonts.googleapis.com/css?family=Merriweather:400,300italic,300" rel="stylesheet" type="text/css"></link>
+          <link href="http://fonts.googleapis.com/css?family=Kotta+One" rel="stylesheet" type="text/css"></link>
+          <link href="http://fonts.googleapis.com/css?family=Lora" rel="stylesheet" type="text/css"></link>
+          <link href="css/bootstrap.min.css" rel="stylesheet"></link>
+          <link href="css/abcd.css" rel="stylesheet"></link>
+        </head>
+
+        <div class="navbar-wrapper">
+          <div class="container">
+            <div id="navbar" class="navbar navbar-inverse navbar-fixed-top" role="navigation">
+            </div>
+          </div>
+        </div>
+
+        <div class ="jumbotron">
+          <div class="container">
+            <h1>Links Session-Typed Chat</h1>
+            <hr>...complete with totally original stylesheet</hr>
+          </div>
+        </div>
+
+
+        <div id="main" class="container marketing">
+          <div class="row featurette">
+            <div id="roomSelect">
+              <p> Choose one of the existing rooms or create a new one </p>
+                        <div id="room_placeholder"></div>
+            </div>
+          </div>
+        </div>
+      </html>
+  }
+
+  start()
+
+}

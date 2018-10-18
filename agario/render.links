@@ -1,0 +1,150 @@
+open Util.Lists
+open Util.Colour
+open Util.Conversions
+open Logic
+
+fun swap_buffers(main_canvas_node, disp_canvas_node) {
+    var ctx = jsGetContext2D(disp_canvas_node);
+    jsDrawImage(ctx, main_canvas_node, 0.0, 0.0);
+
+    ignore(domSetStyleAttrFromRef(main_canvas_node, "display", "block"));
+    ignore(domSetStyleAttrFromRef(disp_canvas_node, "display", "none"));
+    clear(ctx)
+}
+
+fun draw(player_id, state: GameState) {
+
+    # double buffering: swap the canvases' display attribute
+    var (main_canvas, disp_canvas) =
+        if (domGetStyleAttrFromRef(getNodeById(canvas1), "display") == "none")
+            (canvas1, canvas2)
+        else
+            (canvas2, canvas1);
+    var canvas_node = getNodeById(main_canvas);
+    var ctx = jsGetContext2D(canvas_node);
+
+    fun draw_grid(player_x, player_y, scale) {
+
+        jsLineWidth(ctx, scale);
+        jsStrokeStyle(ctx, "#ddd");
+        var grid_lines_distance = ftoi(scale *. itof(grid_lines_distance));
+
+        jsBeginPath(ctx);
+        var xs = lsFilter(fun(x) { x /. scale > player_x *. scale -. x_offset /. scale &&
+                                   x *. scale < player_x /. scale +. x_offset *. scale},
+                          lsMap(fun(x){ itof(grid_lines_distance * x) },
+                                lsRange(-screenWidth/2/grid_lines_distance,
+                                        (gameWidth+screenWidth/2)/grid_lines_distance)));
+        lsMapIgnore(fun(x){ jsMoveTo(ctx, (x -. player_x) *. scale +. x_offset, 0.0);
+                            jsLineTo(ctx, (x -. player_x) *. scale +. x_offset, screenHeightFloat);
+                            jsStroke(ctx)},
+                            xs);
+
+        var ys = lsFilter(fun(y) { y /. scale > player_y *. scale -. y_offset /. scale &&
+                                   y *. scale < player_y /. scale +. y_offset *. scale},
+                          lsMap(fun(y){ itof(grid_lines_distance * y) },
+                                lsRange(-screenHeight/2/grid_lines_distance,
+                                        (gameHeight+screenHeight/2)/grid_lines_distance)));
+        lsMapIgnore(fun(y){ jsMoveTo(ctx, 0.0, (y -. player_y) *. scale +. y_offset);
+                            jsLineTo(ctx, screenWidthFloat, (y -. player_y) *. scale +. y_offset);
+                            jsStroke(ctx)},
+                            ys);
+
+        jsClosePath(ctx);
+    }
+
+    fun draw_circle(x: Float, y: Float, r: Float, border_width: Float,
+                    fill_colour: String, border_colour: String, scale: Float) {
+        jsBeginPath(ctx);
+        jsArc(ctx, x, y, r *. scale, 0.0, 2.0 *. pi, false);
+        jsSetFillColor(ctx, fill_colour);
+        jsFill(ctx);
+        jsLineWidth(ctx, border_width *. scale);
+        jsStrokeStyle(ctx, border_colour);
+        jsStroke(ctx);
+        ()
+    }
+
+    fun draw_player_name(name, mass, x, y) {
+        jsSetFillColor(ctx, "black");
+        var font_size = ftoi(8.0 *. sqrt(sqrt(itof(mass))));
+        jsCanvasFont(ctx, itos(font_size) ^^ "px Ubuntu");
+
+        var draw_x = x -. 0.22 *. itof(length(explode(name)) * font_size);
+        var draw_y = y +. 0.22 *. itof(font_size);
+        jsFillText(ctx, name, draw_x, draw_y)
+    }
+
+    fun draw_food(player, scale) {
+        var food_state = state.food;
+        var blob = hd(player.blobs);
+        var cells = lsZip(food_state.pos, food_state.colour);
+        lsMapIgnore(fun(cell) {
+                        draw_circle(((cell.1).1 -. blob.x) *. scale +. x_offset,
+                                    ((cell.1).2 -. blob.y) *. scale +. y_offset,
+                                    food_radius, 1.0, cell.2, "grey", scale)
+                    }, cells)
+    }
+
+    fun draw_players(player: PlayerState, players, scale) {
+        if (lsEmpty(players))
+            ()
+        else {
+            var (x_com, y_com) = centre_of_mass(player.blobs);
+            var blob = hd(player.blobs);
+            switch (lsHead(players)) {
+                case (id, curr_player) -> {
+                    if (id == player_id) {
+                        ignore(map(fun(curr_blob) {
+                                var draw_x = x_offset -. x_com +. curr_blob.x;
+                                var draw_y = y_offset -. y_com +. curr_blob.y;
+                                draw_circle(draw_x, draw_y,
+                                            player_radius(curr_blob.mass), 3.0,
+                                            curr_player.colour.1, curr_player.colour.2, scale);
+                                draw_player_name(curr_player.name, curr_blob.mass, draw_x, draw_y);
+                                # draw_player_name(itos(curr_blob.mass), curr_blob.mass, draw_x, draw_y);
+                            }, curr_player.blobs));
+                    } else {
+                        ignore(map(fun(curr_blob) {
+                                var draw_x = (curr_blob.x -. blob.x) *. scale +. x_offset;
+                                var draw_y = (curr_blob.y -. blob.y) *. scale +. y_offset;
+                                draw_circle(draw_x, draw_y,
+                                            player_radius(curr_blob.mass), 3.0,
+                                            curr_player.colour.1, curr_player.colour.2, scale);
+                                draw_player_name(curr_player.name, curr_blob.mass, draw_x, draw_y);
+                                # draw_player_name(itos(curr_blob.mass), curr_blob.mass, draw_x, draw_y);
+                                }, curr_player.blobs));
+                    };
+                    draw_players(player, lsTail(players), scale)
+                }
+            }
+        }
+    }
+
+    # if alive, draw the player, else draw the biggest player remaining
+    var player_maybe = lsDictLookup(player_id, state.players);
+    var player =
+        if (isJust(player_maybe))
+            fromJust(player_maybe)
+        else {
+            print("drawing biggest player reminding with "^^intToString(lsLength(state.players))^^" players.");
+            highest_mass_player((name="", colour=("",""),
+                                 blobs=[(id=1, x=1000.0, y=1000.0, mass=0, split_pos=(-.1.0,-.1.0))]): PlayerState, state.players)};
+    print("got player");
+    var scale = get_scale(player);
+    var (player_x, player_y) = centre_of_mass(player.blobs);
+
+    draw_grid(player_x, player_y, scale);
+    draw_food(player, scale);
+    draw_players(player, state.players, scale);
+    swap_buffers(canvas_node, getNodeById(disp_canvas));
+
+    if (player_maybe == Nothing) {
+        jsSetFillColor(ctx, "black");
+        jsCanvasFont(ctx, "60px Ubuntu");
+        jsFillText(ctx, "Game over!", 230.0, 220.0);
+    } else ();
+
+
+    ()
+}

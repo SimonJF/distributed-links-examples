@@ -1,0 +1,212 @@
+open Util.Lists
+open Util.Conversions
+open Util.Colour
+open Render
+open Logic
+
+### EVENT LISTENERS
+fun on_mousemove(e) {
+    var cursor = (getPageX(e), getPageY(e));
+    store_int("cursor_x", cursor.1);
+    store_int("cursor_y", cursor.2);
+}
+# regualarly gets position of the cursor and sends it to the main_game_loop
+fun cursor_loop(game_ap, prev_time:Int) client {
+  var curr_time = getTime(event);
+  if (curr_time - prev_time > 50) {
+    var cursor:Input = Cursor(
+      switch(get_int("cursor_x")) { case Just(x) -> x
+                                    case Nothing -> gameWidth/2 },
+      switch(get_int("cursor_y")) { case Just(y) -> y
+                                    case Nothing -> gameHeight/2 }
+    );
+    var s = send(cursor, select Navigate request(game_ap));
+    cursor_loop(game_ap, curr_time)
+  } else {
+     cursor_loop(game_ap, prev_time)
+  }
+}
+
+# main loop. receives cursor position, generates a new GameState and sends
+# it to the drawing routine
+fun main_game_loop(ap:AP(ClientChannel), player_id, drawHandler, game_state, eaten_blobs, kill_blobs) client {
+  fun inGame(player_id, game_state) {
+    isJust(lsDictLookup(player_id, game_state.players))
+  }
+
+  var s:ClientChannel = accept(ap);
+  offer(s) {
+    case UpdatePlayers(s) ->
+      var player_state_maybe = lsDictLookup(player_id, game_state.players);
+      var s = send((player_id, player_state_maybe, eaten_blobs, kill_blobs), s);
+      var (new_players, _) = receive(s);
+      var game_state_new = (game_state with players=new_players);
+      main_game_loop(ap, player_id, drawHandler, game_state_new, [], [])
+    case Navigate(s) ->
+      var (cursor_input:Input, _) = receive(s);
+       if (inGame(player_id, game_state)) {
+         var (game_state_new, eaten_blobs_new, kill_blobs_new) =
+           update_logic(game_state, player_id, cursor_input);
+           drawHandler ! Draw(inGame(player_id, game_state_new), game_state_new);
+           main_game_loop(ap, player_id, drawHandler, game_state_new,
+                          concat([eaten_blobs_new, eaten_blobs]),
+                          concat([kill_blobs_new, kill_blobs]))
+       } else
+         main_game_loop(ap, player_id, drawHandler, game_state, eaten_blobs, kill_blobs)
+  }
+}
+
+# redraws board based on a new gameState sent by main_game_loop()
+fun draw_game_loop(player_id) client {
+  receive {
+    case Draw(in_game:Bool, new_game_state:GameState) ->
+      if (in_game) draw(player_id, new_game_state) else ();
+      draw_game_loop(player_id)
+  }
+}
+
+fun server_handler_loop(update_channel:(~UpdatePlayerChannel),
+                        game_ap:AP(ClientChannel), prev_time) client {
+  # increase mass of a blob that ate other player's blob with "blob_id"
+  fun inflateRec(blob_id, mass_inc, blobs) {
+    switch(blobs) {
+      case [] -> []
+      case (x:Blob)::xs ->
+        if (x.id == blob_id) ((x with mass=x.mass+mass_inc))::xs
+        else x::inflateRec(blob_id, mass_inc, xs)
+    }
+  }
+
+  # increase mass of all blobs that have eaten otehr player's blobs
+  fun inflateBlobs(to_inflate, blobs) {
+    switch(to_inflate) {
+      case [] -> blobs
+      case x::xs -> inflateBlobs(xs, inflateRec(x.blob_id, x.mass_inc, blobs))
+    }
+  }
+
+  # remove all blobs that have been eaten by other players
+  fun notEatenBlobs(eaten, blobs) {
+    switch(eaten) {
+      case [] -> blobs
+      case x::xs -> notEatenBlobs(xs, filter(fun(blob) {blob.id<>x.blob_id}, blobs))
+    }
+  }
+
+  var curr_time = getTime(event);
+  if (curr_time - prev_time < 100)
+    server_handler_loop(update_channel, game_ap, prev_time)
+  else {
+
+    # Get player id and state from the main loop and send them over to server.
+    # The server then replies with up to date info for all players
+    # Update main game loop with new player states.
+    var channel:(~ClientChannel) = request(game_ap);
+    var channel = select UpdatePlayers channel;
+    var ((player_id, player_state_maybe, eaten_blobs, kill_blobs), channel) =
+      receive(channel);
+
+    # check if eaten by a different player
+    if (isJust(player_state_maybe)) {
+      var player_state = fromJust(player_state_maybe);
+      var (to_inflate, update_channel) = receive(select Update update_channel);
+      var player_state = (player_state with blobs=inflateBlobs(to_inflate, player_state.blobs));
+
+      var (eaten, update_channel) = receive(update_channel);
+      var player_state = (player_state with blobs=notEatenBlobs(eaten, player_state.blobs));
+
+      var update_channel = send((state=player_state, kill_blobs=kill_blobs, eaten_blobs=eaten_blobs):PlayerUpdateInfo,
+                                update_channel);
+      var (players:([(Int, PlayerState)]), update_channel) = receive(update_channel);
+      ignore(send(ls(players), channel));
+      server_handler_loop(update_channel:(~UpdatePlayerChannel), game_ap, curr_time)
+    } else {
+      ignore(send(ls([]), channel));
+      ignore(send((player_id, kill_blobs), select Died update_channel));
+      redirect("/");
+    }
+  }
+}
+
+fun initialize(player_name:String, ap) client {
+  fun client_setup(s) {
+    replaceNode(<div id="container" tabindex="1">
+                    <canvas id="{canvas1}" height="{itos(screenHeight)}" width="{itos(screenWidth)}"/>
+                    <canvas id="{canvas2}" height="{itos(screenHeight)}" width="{itos(screenWidth)}"/>
+                </div>,
+                getNodeById("container"));
+    var (player_id, s) = receive(s);
+
+    var init_game:GameState = initial_game_state(player_name, player_id);
+    var player_state:PlayerState = lsHead(init_game.players).2;
+    var update_channel = send(player_state, s);
+
+    var drawHandler = spawnClient { draw_game_loop(player_id) };
+
+    # start of the client handler
+    var game_access_point = new();
+    var gameHandler = spawnClient {
+      main_game_loop(game_access_point:AP(ClientChannel), player_id, drawHandler, init_game, [], [])};
+
+    #  cursor tracking loop
+    var _ = spawnClient { cursor_loop(game_access_point, getTime(event)) };
+
+    var _ = spawnClient { server_handler_loop(update_channel, game_access_point, getTime(event)) };
+
+    jsSetOnEvent(getNodeById("container"), "mousemove", on_mousemove, true);
+
+    ()
+  }
+  var s = request(ap);
+  var _ = spawnClient { client_setup(s) };
+  ()
+}
+
+fun mainPage(acc_point) {
+    page
+        <html>
+            <head>
+                <title>Agar.io</title>
+                <style>
+                    body {{
+                        margin: 0;
+                    }}
+                    #{stringToXml(canvas1)} {{
+                        display: none;
+                        position: absolute;
+                        top: 0px;
+                        left: 0px;
+                    }}
+                    #{stringToXml(canvas2)} {{
+                        display: block;
+                        position: absolute;
+                        top: 0px;
+                        left: 0px;
+                    }}
+                    #{stringToXml("container")} {{
+                        position: relative;
+                        width: {stringToXml(itos(screenWidth))}px;
+                        height: {stringToXml(itos(screenHeight))}px;
+                    }}
+                    #name_form {{
+                        position: relative;
+                        left: {stringToXml(itos(screenWidth/2))}px;
+                        top: {stringToXml(itos(screenHeight/2))}px;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div id="container">
+                    <div id="name_form">
+                        Agar.io
+                        <form l:onsubmit="{initialize(player_name, acc_point) }">
+                            <input type="text" l:name="player_name" autofocus="autofocus"/>
+                        </form>
+                    </div>
+                </div>
+
+                <div id="{state_node_id}" style="display:none;" ></div>
+
+            </body>
+        </html>
+}
