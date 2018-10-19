@@ -12,14 +12,6 @@ typename MemoryCell = [&| Set: ?Int.End, Get: !Int.End |&];
 sig ap : AP(CalcServer)
 var ap = new();
 
-# Access point to allow the DOM to dispatch events
-sig domAP : AP(DomEvent)
-var domAP = new();
-
-# Access point to allow interaction with memory
-sig cellAP : AP(MemoryCell)
-var cellAP = new();
-
 module Parser {
 
   sig parse : (String) ~> [String]
@@ -87,24 +79,32 @@ module Parser {
 }
 
 module Memory {
-  fun cellLoop(x) {
-    var s = accept(cellAP);
-    offer(s) {
-      case Get(s) -> ignore(send(x, s)); cellLoop(x)
-      case Set(s) ->
-        var (x, _) = receive(s);
-        cellLoop(x)
-    }
-  }
+  # Access point to allow interaction with memory
+  sig cellAP : AP(MemoryCell)
+  var cellAP = new();
 
-  fun requestCell() {
+  var _ = {
+    fun loop(x) {
+      var s = accept(cellAP);
+      offer(s) {
+        case Get(s) -> ignore(send(x, s)); loop(x)
+        case Set(s) ->
+          var (x, _) = receive(s);
+          loop(x)
+      }
+    }
+    ignore(spawn { loop(0) })
+  };
+
+
+  fun get() {
     var s = request(cellAP);
     var s = select Get s;
     var (res, _) = receive(s);
     res
   }
 
-  fun updateCell(n) {
+  fun put(n) {
     var s = request(cellAP);
     var s = select Set s;
     ignore(send(n, s))
@@ -177,27 +177,34 @@ fun eval_rec(stack, postf) {
   }
 }
 
-fun domWorker() {
-  var res = offer(accept(domAP)) {
-    case Eval(_) ->
-      var exp = domGetAttributeFromRef(getNodeById("display"), "value");
-      var postf = Parser.parse(exp);
-      eval_rec([], postf)
-    case Neg(_) ->
-      var s = request(ap);
-      var x = domGetAttributeFromRef(getNodeById("display"), "value");
-      receive(send(stringToInt(x),select Neg s)).1
-    case MemAdd(_) ->
-      var s = request(ap);
-      var x = stringToInt(domGetAttributeFromRef(getNodeById("display"), "value"));
-      var s = send(x,select MemAdd s);
-      x
-    case MemRec(_) ->
-      var s = request(ap);
-      receive(select MemRec s).1
-  };
-  format(res);
-  domWorker()
+module DOM {
+
+  # Access point to allow the DOM to dispatch events
+  sig domAP : AP(DomEvent)
+  var domAP = new();
+
+  fun domWorker() {
+    var res = offer(accept(domAP)) {
+      case Eval(_) ->
+        var exp = domGetAttributeFromRef(getNodeById("display"), "value");
+        var postf = Parser.parse(exp);
+        eval_rec([], postf)
+      case Neg(_) ->
+        var s = request(ap);
+        var x = domGetAttributeFromRef(getNodeById("display"), "value");
+        receive(send(stringToInt(x),select Neg s)).1
+      case MemAdd(_) ->
+        var s = request(ap);
+        var x = stringToInt(domGetAttributeFromRef(getNodeById("display"), "value"));
+        var s = send(x,select MemAdd s);
+        x
+      case MemRec(_) ->
+        var s = request(ap);
+        receive(select MemRec s).1
+    };
+    format(res);
+    domWorker()
+  }
 }
 
 sig format : (Int) ~> ()

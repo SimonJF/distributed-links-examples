@@ -36,6 +36,20 @@ module StringAssocList {
   }
 }
 
+module List {
+  sig contains : (a, [a]) ~> Bool
+  fun contains(x, ys) {
+    switch(ys) {
+      case [] -> false
+      case y :: ys ->
+        if (x == y) {
+          true
+        } else {
+          contains(x, ys)
+        }
+    }
+  }
+}
 
 typename LinList(a) = [| LinNil | LinCons: (a, LinList(a)) |];
 
