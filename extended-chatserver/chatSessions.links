@@ -7,14 +7,14 @@ typename RoomName = String;
 
 # Messages received by a connected client
 typename ClientReceive =
-  [&| IncomingChatMessage : !(Nickname, Message) . ClientReceive,
+  [&| ChatMessage : !(Nickname, Message) . ClientReceive,
       NewUser : !(Nickname) . ClientReceive,
       NewTopic : !(Topic) . ClientReceive,
       UserLeft : !(Nickname) . ClientReceive,
       UserMuted : !(Nickname) . ClientReceive,
       UserUnmuted : !(Nickname) . ClientReceive,
       MakeModerator : ![Nickname] . ClientReceive,
-      Leave : End
+      Kick : End
   |&];
 
 typename ClientSend =
