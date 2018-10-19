@@ -1,0 +1,50 @@
+module UniqueID {
+  fun loop(x) {
+    receive {
+      Req(pid) -> pid ! x; loop(x + 1)
+    }
+  }
+
+  var uidPid = spawn { loop(0) }
+
+  fun genID() {
+    spawnWait { Req(self()) ! uidPid; receive { x -> x } }
+  }
+}
+
+module StringAssocList {
+
+  sig lookup : (a, [(a, b)]) ~> Maybe(b)
+  fun lookup(x, ys) {
+    switch(ys) {
+      case [] -> Nothing
+      case (k, v) :: ys ->
+        if (k == y) {
+          Just(v)
+        } else {
+          lookup(x, ys)
+        }
+    }
+  }
+
+  sig contains : (a, [(a, b)]) ~> Bool
+  fun contains(x, ys) {
+    switch lookup(x, ys) {
+      case Just(_) -> true
+      case Nothing -> false
+    }
+  }
+}
+
+
+typename LinList(a) = [| LinNil | LinCons: (a, LinList(a)) |];
+
+# Maps a function over all channels
+sig linMap : ((s :: Session) ~e~> s, LinList(s)) ~e~> LinList(s)
+fun linMap(f, chans) {
+  switch(chans) {
+    case LinNil -> LinNil
+    case LinCons(ch, chs) -> LinCons(f(ch), (linMap(f, chs)))
+  }
+}
+
