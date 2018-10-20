@@ -22,7 +22,7 @@ typename ClientReceive =
 typename ClientSend =
   [+| ChatMessage : !(Message) . ClientSend,
       ChangeTopic : !(Topic). ClientSend,
-      Leaving : ChatClient |+];
+      Leaving : End |+];
 
 typename ClientConnect =
   ?([RoomName]).!(RoomName, Nickname).
