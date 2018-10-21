@@ -38,7 +38,25 @@ typename RoomJoinResponse =
 
 
 module Moderator {
-  var placeholder = ()
+  sig create : (AP(RoomReceive)) ~> ModeratorSend
+  fun create(roomAp) {
+    linfun loop(s) {
+      offer(s) {
+        case RemoveUser(s) ->
+          var (nick, s) = receive(s);
+          # TODO: send message to AP here
+          loop(s)
+        case MuteUser(s) ->
+          var (nick, s) = receive(s);
+          # TODO: send message to AP here loop(s)
+        case MakeModerator(s) ->
+          var (nick, s) = receive(s);
+          # TODO: send message to AP here
+          loop(s)
+      }
+    }
+    fork(s)
+  }
 }
 
 module Room {
@@ -67,46 +85,64 @@ module Room {
   }
 
   fun loop(state) {
+    fun broadcastJoined(nick, clients) {
+      linMap(fun(s) {
+        var s = select UserJoined s;
+        send(nick, s)
+      }, state.clients)
+    }
+
     offer(s) {
       case JoinRequest(s) ->
         var (nick, s) = receive(s);
+        # If username is already taken, let the client know
         if (contains(nick, state.nicknames)) {
           var _ = send(UsernameTaken, s);
           loop(state)
         } else {
+          # Otherwise, check if that username is a moderator.
           if (contains(nick, state.moderators)) {
             var (roomSend, clientReceive) = createRoomSend();
             var moderatorSend = Moderator.create(state.ap);
-            var _ = send(JoinedAsModerator(state.topic, clientReceive, moderatorSend), s);
+            # Broadcast that the user has joined
+            var clients = broadcastJoined(nick, state.clients);
+            var _ =
+              send(JoinedAsModerator(state.topic,
+                clientReceive, moderatorSend), s);
             loop((state with
               nicknames=nick :: state.nicknames,
-              clients=LinCons(roomSend, state.clients)))
+              clients=LinCons(roomSend, clients)))
           } else {
             var (roomSend, clientReceive) = createRoomSend();
+            var clients = broadcastJoined(nick, state.clients);
             var _ = send(Joined(state.topic, clientReceive)
             loop((state with
               nicknames=nick :: state.nicknames,
-              clients=LinCons(roomSend, state.clients)))
+              clients=LinCons(roomSend, clients)))
           }
         }
       case Chat(s) ->
         var ((nick, msg), _) = receive(s);
-        var clients = ap.clients; # linear
         var clients = linMap(fun(s) {
           var s = select IncomingChatMessage s;
           send (nick, msg)
-        }, clients);
+        }, state.clients);
         loop((state with clients=clients))
       case NewTopic(s) ->
         var (newTopic, _) = receive(s);
-        loop((state with topic=newTopic))
+        var clients = linMap(fun(s) {
+          var s = select NewTopic s;
+          send(newTopic, s)
+        }, state.clients);
+        loop((state with topic=newTopic, clients=clients))
       case Leave(s, nick) ->
         var (name, _) = receive(s);
         var clients = linMap(fun(s) {
           var s = select UserLeft s;
           var s = send(name, s);
           s
-        }, state.clients)
+        }, state.clients);
+        loop((state with clients=clients))
       case Kill ->
         var clients = state.clients;
         # Since after selecting Kick, all elements will be of type End
@@ -174,8 +210,8 @@ module RoomManager {
     |&]
 
 
-  sig supervisorAP : AP(RoomManager)
-  var supervisorAP = new();
+  sig managerAP : AP(RoomManager)
+  var managerAP = new();
 
 
   fun roomExists(roomName, rooms) {
@@ -195,12 +231,9 @@ module RoomManager {
     }
   }
 
-  # TODO: Links doesn't have maps / hashtables at the moment,
-  # so we're using an inappropriate data structure (list) here.
-  # When the Proper Modules stuff gets done, it would be good to
-  # replace this with a stdlib hashtable implementation.
+  # Main loop for the room manager
   fun loop(rooms) {
-    var s = accept(supervisorAP);
+    var s = accept(managerAP);
     offer(s) {
       case AddRoom(s) ->
         var (name, s) = receive(s);
@@ -236,7 +269,7 @@ module RoomManager {
   var supervisorPid = spawn { loop([]) }
 
   fun addRoom(name) {
-    var s = request(supervisorAP);
+    var s = request(managerAP);
     var s = select AddRoom s;
     var s = send(name, s);
     var (res, _) = receive(s);
@@ -244,20 +277,20 @@ module RoomManager {
   }
 
   fun removeRoom(name) {
-    var s = request(supervisorAP);
+    var s = request(managerAP);
     var s = select RemoveRoom s;
     ignore(send(name, s))
   }
 
   fun listRooms() {
-    var s = request(supervisorAP);
+    var s = request(managerAP);
     var s = select ListRooms s;
     var (rooms, _) = receive(s);
     rooms
   }
 
   fun connectToRoom(name, roomName) {
-    var s = request(supervisorAP);
+    var s = request(managerAP);
     var s = select ConnectToRoom s;
     var s = send(name, roomName);
     var (res, _) = receive(s);
@@ -301,23 +334,6 @@ module RoomManager {
 #   }
 # }
 
-# A loop providing the client with moderator capabilities
-# fun moderatorHandler(channel, loopPid) {
-#   offer(channel) {
-#     case RemoveUser(channel) ->
-#       var (nick, channel) = receive(channel);
-#       loopPid ! RemoveUser(nick);
-#       moderatorHandler(channel, loopPid)
-#     case MuteUser(channel) ->
-#       var (nick, channel) = receive(channel);
-#       loopPid ! MuteUser(nick);
-#       moderatorHandler(channel, loopPid)
-#     case MakeModerator(channel) ->
-#       var (nick, channel) = receive(channel);
-#       loopPid ! MakeModerator(nick);
-#       moderatorHandler(channel, loopPid)
-#   }
-# }
 # status : ( name:Room, topic:Topic, users:[User] )
 # user : ( nick:Nickname, pid:ClientSendHandler, isAdmin:Bool,
 #          isMuted:Bool )

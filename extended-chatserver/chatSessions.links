@@ -9,13 +9,13 @@ typename ConnectError = [| NameInUse | BadRoom |]
 
 # Messages received by a connected client
 typename ClientReceive =
-  [&| ChatMessage : !(Nickname, Message) . ClientReceive,
-      NewUser : !(Nickname) . ClientReceive,
-      NewTopic : !(Topic) . ClientReceive,
-      UserLeft : !(Nickname) . ClientReceive,
-      UserMuted : !(Nickname) . ClientReceive,
-      UserUnmuted : !(Nickname) . ClientReceive,
-      MakeModerator : ![Nickname] . ClientReceive,
+  [&| IncomingChatMessage : !(Nickname, Message) . ClientReceive,
+      UserJoined : ?(Nickname) . ClientReceive,
+      NewTopic : ?(Topic) . ClientReceive,
+      UserLeft : ?(Nickname) . ClientReceive,
+      UserMuted : ?(Nickname) . ClientReceive,
+      UserUnmuted : ?(Nickname) . ClientReceive,
+      BecomeModerator : ?ModeratorReceive . ClientReceive,
       Kick : End
   |&];
 

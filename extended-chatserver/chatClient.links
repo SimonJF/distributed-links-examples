@@ -1,5 +1,10 @@
 open ChatSessions
 
+
+# New architecture:
+# DOM handler function, handles messages from both moderator and
+# chat messages when joined to the chat room.
+
 module DomFunctions {
   var nickname_box_id = "name_box";
   var chat_box_id = "chat_box";
@@ -17,6 +22,11 @@ module DomFunctions {
 }
 
 open DomFunctions
+
+
+typename ReceiveRoomSelectAction =
+  [&|
+      
 
 fun mainPage(ap) {
   # loop that receives input from
@@ -165,7 +175,8 @@ fun mainPage(ap) {
           var names = for (Nickname(nameStr)<-nicks) { [nameStr] };
           moderatorPid ! MakeMeModerator(names);
           incomingMsgLoop(s, moderatorPid)
-        case Leave(s) ->
+        case Kick(_) ->
+          # TODO: We want to eliminate the use of redirect.
           redirect("/");
           ()
       }
@@ -282,26 +293,27 @@ fun mainPage(ap) {
     fun makeRoomForm(rooms, handlerFn) {
       fun makeRadioRec(rooms) {
             switch(rooms) {
-              case [] -> <#/>
+              case [] -> <#></#>
               case x::xs ->
                 var Room(roomStr) = x;
                 <#>
                   <input type="radio" name="room"
                     l:onchange="{ handlerFn ! Room(roomStr)}"/>
                     { stringToXml(roomStr) } <br/>
-                { makeRadioRec(xs) } </#>
+                  { makeRadioRec(xs) }
+                </#>
             }
           }
       <#>
-      <form id="rooms" l:onsubmit="{ handlerFn ! Submit()}">
-          <input id="startButton" type="radio" name="room" checked="checked"
-                 l:onchange="{ handlerFn ! Room("/newRoom")}"/> New
-          <input id="newRoomText" type="text" value=""/><br/>
-            { makeRadioRec(rooms) }
-          <p>
-            <input type="submit" name="submitButton" value="Enter"/>
-          </p>
-      </form>
+        <form id="rooms" l:onsubmit="{ handlerFn ! Submit()}">
+            <input id="startButton" type="radio" name="room" checked="checked"
+                   l:onchange="{ handlerFn ! Room("/newRoom")}"/> New
+            <input id="newRoomText" type="text" value=""/><br/>
+              { makeRadioRec(rooms) }
+            <p>
+              <input type="submit" name="submitButton" value="Enter"/>
+            </p>
+        </form>
       </#>
     }
 
@@ -335,31 +347,29 @@ fun mainPage(ap) {
     # (TODO: extract the information from DomNodes after submission)
     # At submission, sends the roomname to the server and proceeds to name setup
     fun doSetup(roomStr) {
-      # On the client, request from the given access point
+      # Request from the AP to get a ClientConnect AP
       var s = request(ap);
       # Next, grab the list of rooms
       var (rooms, s) = receive(s);
-      # Spawn the handler function
+      # Spawn the handler function which will handle the room selection
+      # and any updates from the DOM
       var roomHandler = spawnClient { roomSelectLoop(s, roomStr, rooms) };
 
       # Next, populate the placeholder with the received rooms
       var generated_radio_dom = makeRoomForm(rooms, roomHandler);
-      debug("about to evaluate replaceNode");
       replaceNode(generated_radio_dom, getNodeById("room_placeholder"));
     }
 
-    # get all available rooms from teh server and pick one via radio buttons
+    # get all available rooms from the server and pick one via radio buttons
     doSetup("/newRoom");
   }
 
   fun start() {
-    print("In start");
-    # oh dear, Simon attempts front-end webdev
-    var _ = spawnClient { chooseRoom(ap) };
+    var _ = spawnClient { chooseRoom(wap) };
     page
       <html>
         <head>
-          <title>Links chat</title>
+          <title>Extended Links Chat Application</title>
           <link href="http://fonts.googleapis.com/css?family=Merriweather:400,300italic,300" rel="stylesheet" type="text/css"></link>
           <link href="http://fonts.googleapis.com/css?family=Kotta+One" rel="stylesheet" type="text/css"></link>
           <link href="http://fonts.googleapis.com/css?family=Lora" rel="stylesheet" type="text/css"></link>
@@ -385,14 +395,12 @@ fun mainPage(ap) {
         <div id="main" class="container marketing">
           <div class="row featurette">
             <div id="roomSelect">
-              <p> Choose one of the existing rooms or create a new one </p>
-                        <div id="room_placeholder"></div>
+              <p> Choose one of the existing rooms or create a new one.</p>
+              <div id="room_placeholder"></div>
             </div>
           </div>
         </div>
       </html>
   }
-
   start()
-
 }
