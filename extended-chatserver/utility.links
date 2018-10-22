@@ -40,7 +40,7 @@ module List {
 typename LinList(a) = [| LinNil | LinCons: (a, LinList(a)) |];
 
 # Maps a function over all channels
-sig linMap : ((s :: Session) ~e~> s, LinList(s)) ~e~> LinList(s)
+sig linMap : ((s :: Session) ~e~> (t :: Session), LinList(s)) ~e~> LinList(t)
 fun linMap(f, chans) {
   switch(chans) {
     case LinNil -> LinNil

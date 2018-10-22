@@ -23,7 +23,7 @@ module DomFunctions {
 
 open DomFunctions
 
-fun mainPage(ap) {
+fun mainPage() {
   # loop that receives input from
   # 1. the client (moderator) about removing and muting clients
   # 2. the server about users entering/leaving rooms so they can be removed
@@ -295,10 +295,10 @@ fun mainPage(ap) {
       } else {
         var s = send((nickname, roomName), s);
         offer(s) {
-          case Joined(s) ->
+          case JoinedOK(s) ->
             var ((topic, clientReceive), s) = receive(s);
             displayChat(roomName, topic, s, clientReceive, Nothing)
-          case JoinedAsModerator(s) ->
+          case JoinedOKAsModerator(s) ->
             var ((topic, clientReceive, modSend), s) = receive(s);
             displayChat(roomName, topic, s, clientReceive, Just(modSend))
           case Nope(s) ->
@@ -385,7 +385,7 @@ fun mainPage(ap) {
     # get all available rooms from the server and pick one via radio buttons
 
     # First: request from the AP to get a ClientConnect AP
-    var (s: ClientConnect) = request(ap);
+    var (s: ClientConnect) = request(wap);
     # Next, grab the list of rooms
     var (rooms, s) = receive(s);
 
