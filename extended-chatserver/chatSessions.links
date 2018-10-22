@@ -7,6 +7,16 @@ typename RoomName = String;
 
 typename ConnectError = [| NameInUse | BadRoom |];
 
+
+typename ModeratorSend  =
+  [+| RemoveUser : !(Nickname) . ModeratorSend,
+      MuteUser : !(Nickname) . ModeratorSend,
+      MakeModerator : !(Nickname) . ModeratorSend |+];
+
+typename ModeratorReceive = ~ModeratorSend;
+
+
+
 # Messages received by a connected client
 typename ClientReceive =
   [&| IncomingChatMessage : !(Nickname, Message) . ClientReceive,
@@ -31,15 +41,9 @@ typename ClientConnect =
         Nope: !ConnectError.End
     |&];
 
-typename ModeratorSend  =
-  [+| RemoveUser : !(Nickname) . ModeratorSend,
-      MuteUser : !(Nickname) . ModeratorSend,
-      MakeModerator : !(Nickname) . ModeratorSend |+];
-
 typename ServerAccept = ~ClientConnect;
 typename RoomSend = ~ClientReceive;
 typename WorkerReceive = ~ClientSend;
-typename ModeratorReceive = ~ModeratorSend;
 
 
 # Access point for communication between workers on server and clients
