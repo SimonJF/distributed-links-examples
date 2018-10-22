@@ -30,7 +30,7 @@ typename RoomReceive =
 typename RoomHandle = AP(RoomReceive);
 
 typename RoomJoinResponse =
-  [| | UsernameTaken
+  [| UsernameTaken
      | InvalidRoom
      | Joined: (Topic, ClientReceive, RoomHandle)
      | JoinedAsModerator:
@@ -48,7 +48,8 @@ module Moderator {
           loop(s)
         case MuteUser(s) ->
           var (nick, s) = receive(s);
-          # TODO: send message to AP here loop(s)
+          # TODO: send message to AP here
+          loop(s)
         case MakeModerator(s) ->
           var (nick, s) = receive(s);
           # TODO: send message to AP here
@@ -115,10 +116,12 @@ module Room {
           } else {
             var (roomSend, clientReceive) = createRoomSend();
             var clients = broadcastJoined(nick, state.clients);
-            var _ = send(Joined(state.topic, clientReceive)
-            loop((state with
-              nicknames=nick :: state.nicknames,
-              clients=LinCons(roomSend, clients)))
+            var _ = send(Joined(state.topic, clientReceive));
+            var state =
+              (state with
+                nicknames=nick :: state.nicknames,
+                clients=LinCons(roomSend, clients));
+            loop(state)
           }
         }
       case Chat(s) ->
@@ -173,21 +176,21 @@ module Room {
     ignore(select Kill ap)
   }
 
-  sig chatMessage(RoomHandle, Nickname, Message) ~> ()
+  sig chatMessage : (RoomHandle, Nickname, Message) ~> ()
   fun chatMessage(ap, nick, msg) {
     var s = request(ap);
     var s = select Chat s;
     ignore(send((nick, msg), s))
   }
 
-  sig newTopic(RoomHandle, Topic) ~> ()
+  sig newTopic : (RoomHandle, Topic) ~> ()
   fun newTopic(ap, topic) {
     var s = request(ap);
     var s = select NewTopic s;
     ignore(send(topic, s))
   }
 
-  sig leave(RoomHandle, Nickname) ~> ()
+  sig leave : (RoomHandle, Nickname) ~> ()
   fun leave(ap, nick) {
     var s = request(ap);
     var s = select UserLeft s;
@@ -207,7 +210,7 @@ module RoomManager {
       RemoveRoom: ?RoomName.End,
       ListRooms: ![RoomName].End,
       ConnectToRoom: ?(Nickname, RoomName).!RoomJoinResponse.End
-    |&]
+    |&];
 
 
   sig managerAP : AP(RoomManager)
@@ -223,9 +226,9 @@ module RoomManager {
   }
 
   fun removeRoom(roomName, rooms) {
-    switch StringAssocList.lookup(roomName, rooms) {
+    switch (StringAssocList.lookup(roomName, rooms)) {
       case Just(roomHandle) ->
-        Room.kill(roomHandle)
+        Room.kill(roomHandle);
         filter(fun(name, _) { name != roomName }, rooms)
       case None -> rooms
     }
@@ -266,7 +269,8 @@ module RoomManager {
     }
   }
 
-  var supervisorPid = spawn { loop([]) }
+  # Spawn the room manager loop
+  var roomManager = spawn { loop([]) };
 
   fun addRoom(name) {
     var s = request(managerAP);

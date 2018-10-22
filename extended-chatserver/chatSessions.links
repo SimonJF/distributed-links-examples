@@ -5,7 +5,7 @@ typename Message = String;
 typename Topic = String;
 typename RoomName = String;
 
-typename ConnectError = [| NameInUse | BadRoom |]
+typename ConnectError = [| NameInUse | BadRoom |];
 
 # Messages received by a connected client
 typename ClientReceive =
@@ -28,7 +28,7 @@ typename ClientConnect =
   ?([RoomName]).!(RoomName, Nickname).
     [&| Joined: ?(Topic, ClientReceive) . ClientSend,
         JoinedAsModerator: ?(Topic, ClientReceive, ModeratorSend). ClientSend,
-        Nope: !ConnectError.ClientConnect
+        Nope: !ConnectError.End
     |&];
 
 typename ModeratorSend  =

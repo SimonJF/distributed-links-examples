@@ -23,7 +23,6 @@ module DomFunctions {
 
 open DomFunctions
 
-
 fun mainPage(ap) {
   # loop that receives input from
   # 1. the client (moderator) about removing and muting clients
@@ -94,8 +93,8 @@ fun mainPage(ap) {
 
 
   fun displayChat(room, topic, clientSend, clientReceive, moderatorChan) {
-    var Room(roomStr) = room;
-    var Topic(topicStr) = topic;
+
+    var outgoingAP = new();
 
     fun addToMsgBox(xml) {
       var msgsNode = getNodeById("msgs");
@@ -136,76 +135,74 @@ fun mainPage(ap) {
       addToMsgBox(to_add)
     }
 
-
-    fun incomingMsgLoop(s, moderatorPid) {
+    fun incomingMsgLoop(s) {
       offer(s) {
         case IncomingChatMessage(s) ->
           var ((Nickname(nick), Message(chatmsg)), s) = receive(s);
           debug("Received incoming chat message (" ^^ chatmsg ^^ ") from (" ^^ nick ^^ ")");
           addChatMsg(nick, chatmsg);
-          incomingMsgLoop(s, moderatorPid)
+          incomingMsgLoop(s)
         case NewUser(s) ->
           var (Nickname(nick), s) = receive(s);
           moderatorPid ! NewUser(nick);
           addNewUser(nick);
-          incomingMsgLoop(s, moderatorPid)
+          incomingMsgLoop(s)
         case NewTopic(s) ->
           var (Topic(topic), s) = receive(s);
           changeTopic(topic);
-          incomingMsgLoop(s, moderatorPid);
+          incomingMsgLoop(s)
         case UserLeft(s) ->
           var (Nickname(nick), s) = receive(s);
           moderatorPid ! UserLeft(nick);
           removeUser(nick); # Poor Nick
-          incomingMsgLoop(s, moderatorPid)
+          incomingMsgLoop(s)
         case UserMuted(s) ->
           var (Nickname(nick), s) = receive(s);
           muteUser(nick);
-          incomingMsgLoop(s, moderatorPid)
+          incomingMsgLoop(s)
         case UserUnmuted(s) ->
           var (Nickname(nick), s) = receive(s);
           unmuteUser(nick);
-          incomingMsgLoop(s, moderatorPid)
-        case MakeModerator(s) ->
-          var (nicks, s) = receive(s);
-          var names = for (Nickname(nameStr)<-nicks) { [nameStr] };
-          moderatorPid ! MakeMeModerator(names);
-          incomingMsgLoop(s, moderatorPid)
+          incomingMsgLoop(s)
+        case BecomeModerator(chan) ->
+          cancel(chan); # FIXME: FOR NOW ONLY!
+          incomingMsgLoop(s)
         case Kick(_) ->
-          # TODO: We want to eliminate the use of redirect.
+          # FIXME: We want to eliminate the use of redirect.
           redirect("/");
           ()
       }
     }
 
-    fun outgoingMsgLoop(s) {
-      fun isTopicCmd(s) {
-        (charAt(s, 0) == '/') &&
-        (strlen(s) > 8) &&
-        (strsub(s, 0, 7) == "/topic ")
+    fun outgoingMsgLoop(clientSend, moderatorChan) {
+      fun isTopicCmd(str) {
+        (charAt(str, 0) == '/') &&
+        (strlen(str) > 8) &&
+        (strsub(str, 0, 7) == "/topic ")
       }
 
-      fun getTopic(s) {
-        strsub(s, 7, strlen(s) - 7)
+      fun getTopic(str) {
+        strsub(str, 7, strlen(str) - 7)
       }
 
-      receive {
-        case str ->
-          if (isTopicCmd(str)) {
-            var s = select ChangeTopic s;
-            var s = send(Topic(getTopic(str)), s);
-            outgoingMsgLoop(s)
-          } else {
-            var s = select ChatMessage s;
-            var s = send(Message(str), s);
-            outgoingMsgLoop(s)
-          }
+      # Synchronise on outgoingAP
+      var (str, _) = receive(accept(outgoingAP));
+
+      if (isTopicCmd(str)) {
+        var clientSend = select ChangeTopic clientSend;
+        var clientSend = send(Topic(getTopic(str)), clientSend);
+        outgoingMsgLoop(clientSend, moderatorChan)
+      } else {
+        var clientSend = select ChatMessage clientSend;
+        var clientSend = send(str, clientSend);
+        outgoingMsgLoop(clientSend, moderatorChan)
       }
     }
 
-    fun chatBox(outgoingHandlerPid) {
-      fun handleSubmit() {
-        outgoingHandlerPid ! getInputContents(chat_box_id);
+
+    fun chatBox() {
+      fun submit() {
+        send(getInputContents(chat_box_id), request(outgoingAP));
         clearInput(chat_box_id)
       }
 
@@ -216,8 +213,8 @@ fun mainPage(ap) {
           <div id="topic"><p><span class="lead"><b>Topic: </b>{stringToXml(topicStr)}</span></p></div>
           <div id="msgs" style="overflow-y:scroll; width:100%; height:400px;"></div>
           <div>
-            <form l:onsubmit="{handleSubmit()}">
-              <input id="chat_box" type="text" style="width:100%"></input>
+            <form l:onsubmit="{submit()}">
+              <input id="{chat_box_id}" type="text" style="width:100%"></input>
             </form>
           </div>
         </div>
@@ -225,41 +222,37 @@ fun mainPage(ap) {
     }
 
 
-    # channel contacting client about messaging, topic changes
-    var outgoingHandler = spawnClient { outgoingMsgLoop(outgoingMsgChan) };
+    # Spawn process which sends messages to the server
+    ignore(spawnClient { outgoingMsgLoop(clientSend, moderatorChan)});
 
-    # loop that contacts server about user deletion/muting
-    # also keeps track of currently selection user
-    var modHandler = spawnClient { moderatorHandler(moderatorChan) };
-
-    # channel for the server to send new client/ client left updates
-    var incomingHandler =
-      spawnClient { incomingMsgLoop(incomingMsgChan, modHandler) };
+    # Spawn process which handles incoming messages from the server
+    ignore(spawnClient { incomingMsgLoop(incomingMsgChan) });
 
     # Finally, remove the name request box, put the chatbox in, and start off
-    replaceChildren(chatBox(outgoingHandler), getNodeById("main"));
-    if (is_mod) replaceChildren(makeAdminBox(modHandler),
-                                getNodeById("adminBox_placehodler"))
-    else ()
+    replaceChildren(chatBox(), getNodeById("main"));
+    # TODO: Add moderator handler box back in
+    #if (is_mod) replaceChildren(makeAdminBox(modHandler),
+    #                            getNodeById("adminBox_placehodler"))
+    #else ()
   }
 
-  fun makeAdminBox(modHandler) {
-    <#>
-      <form id="adminForm" l:onsubmit="{()}">
-        <p>
-          <select id="clientSelect" required="required">
-            <option value="">None selected</option>
-          </select><br/>
-          <input type="submit" id="adminRemove" value="Remove"
-          l:onclick="{modHandler ! Remove() }"/>
-          <input type="submit" id="adminMute" value="Mute/Unmute"
-          l:onclick="{modHandler ! Mute() }"/>
-          <input type="submit" id="adminMakeAdmin" value="Make moderator"
-          l:onclick="{modHandler ! MakeModerator() }"/>
-        </p>
-      </form>
-    </#>
-  }
+  # fun makeAdminBox(modHandler) {
+  #   <#>
+  #     <form id="adminForm" l:onsubmit="{()}">
+  #       <p>
+  #         <select id="clientSelect" required="required">
+  #           <option value="">None selected</option>
+  #         </select><br/>
+  #         <input type="submit" id="adminRemove" value="Remove"
+  #         l:onclick="{modHandler ! Remove() }"/>
+  #         <input type="submit" id="adminMute" value="Mute/Unmute"
+  #         l:onclick="{modHandler ! Mute() }"/>
+  #         <input type="submit" id="adminMakeAdmin" value="Make moderator"
+  #         l:onclick="{modHandler ! MakeModerator() }"/>
+  #       </p>
+  #     </form>
+  #   </#>
+  # }
 
   fun chooseRoom(ap) {
     var roomFormAP = new();
@@ -324,7 +317,7 @@ fun mainPage(ap) {
                 <label>
                   <input type="radio" name="roomName" id="newRoom" value="newRoom" />
                   New Room
-                  <input type="text" id="newRoomName"  disabled />
+                  <input type="text" id="newRoomName"  disabled="disabled"></input>
                 </label>
               </div>
             </#>
@@ -333,7 +326,7 @@ fun mainPage(ap) {
              <div class="radio">
                 <label>
                   <input type="radio" name="roomName"
-                    id="newRoom" value="newRoom" checked />
+                    id="newRoom" value="newRoom" checked="checked" />
                   New Room
                   <input type="text" id="newRoomName" />
                 </label>
@@ -347,7 +340,7 @@ fun mainPage(ap) {
               if (isFirst) {
                 <#>
                   <input type="radio" name="roomName"
-                    id="{roomId}" value="{x}" checked />
+                    id="{roomId}" value="{x}" checked="checked" />
                 </#>
               } else {
                 <#>

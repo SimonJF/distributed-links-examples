@@ -1,17 +1,3 @@
-module UniqueID {
-  fun loop(x) {
-    receive {
-      Req(pid) -> pid ! x; loop(x + 1)
-    }
-  }
-
-  var uidPid = spawn { loop(0) }
-
-  fun genID() {
-    spawnWait { Req(self()) ! uidPid; receive { x -> x } }
-  }
-}
-
 module StringAssocList {
 
   sig lookup : (a, [(a, b)]) ~> Maybe(b)
@@ -29,7 +15,7 @@ module StringAssocList {
 
   sig contains : (a, [(a, b)]) ~> Bool
   fun contains(x, ys) {
-    switch lookup(x, ys) {
+    switch (lookup(x, ys)) {
       case Just(_) -> true
       case Nothing -> false
     }
