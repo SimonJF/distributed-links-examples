@@ -68,7 +68,7 @@ module Room {
      nicknames:[Nickname],
      moderators:[Nickname],
      ap:AP(RoomReceive),
-     clients:LinList(WorkerSend));
+     clients:LinList(RoomSend));
 
   # Gets us a pair of (RoomSend, ~RoomSend) endpoints.
   # Perhaps this should be in the standard library.

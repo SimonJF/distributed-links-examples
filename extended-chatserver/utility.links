@@ -5,7 +5,7 @@ module StringAssocList {
     switch(ys) {
       case [] -> Nothing
       case (k, v) :: ys ->
-        if (k == y) {
+        if (k == x) {
           Just(v)
         } else {
           lookup(x, ys)

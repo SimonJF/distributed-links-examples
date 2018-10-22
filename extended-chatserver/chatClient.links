@@ -28,68 +28,68 @@ fun mainPage(ap) {
   # 1. the client (moderator) about removing and muting clients
   # 2. the server about users entering/leaving rooms so they can be removed
   #    from the dropdown selection box
-  fun moderatorHandler(channel) {
-    fun makeOption(name) {
-      var to_add = <#><option id="/id_placeholder">
-                   {stringToXml(name)}</option></#>;
-      appendChildren(to_add, getNodeById("clientSelect"));
-      var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
-                                     "value", name);
-      var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
-                                     "id", "/moderator"^^name);
-      ()
-    }
-
-    fun makeOptions(names) {
-      switch(names) {
-        case [] -> ()
-        case x::xs -> makeOption(x); makeOptions(xs)
-      }
-    }
-
-    receive {
-      case NewUser(name) ->
-        makeOption(name);
-        moderatorHandler(channel)
-      case UserLeft(name) ->
-        removeNode(getNodeById("/moderator"^^name));
-        moderatorHandler(channel)
-      case Remove() ->
-        var selectedUser = getInputContents("clientSelect");
-        if (selectedUser == "") {
-          print("No option has been selected");
-          moderatorHandler(channel)
-        } else {
-          var channel = send(Nickname(selectedUser), select RemoveUser channel);
-          moderatorHandler(channel)
-        }
-      case Mute() ->
-        var selectedUser = getInputContents("clientSelect");
-        if (selectedUser == "") {
-          print("No option has been selected");
-          moderatorHandler(channel)
-        } else {
-          var channel = send(Nickname(selectedUser), select MuteUser channel);
-          moderatorHandler(channel)
-        }
-      case MakeModerator() ->
-        var selectedUser = getInputContents("clientSelect");
-        if (selectedUser == "") {
-          print("No option has been selected");
-          moderatorHandler(channel)
-        } else {
-          var channel = send(Nickname(selectedUser),
-                        select MakeModerator channel);
-          moderatorHandler(channel)
-        }
-      case MakeMeModerator(names) ->
-        print("Became a moderator");
-        replaceChildren(makeAdminBox(self()),
-                        getNodeById("adminBox_placehodler"));
-        makeOptions(names);
-        moderatorHandler(channel)
-    }
-  }
+# fun moderatorHandler(channel) {
+#   fun makeOption(name) {
+#     var to_add = <#><option id="/id_placeholder">
+#                  {stringToXml(name)}</option></#>;
+#     appendChildren(to_add, getNodeById("clientSelect"));
+#     var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
+#                                    "value", name);
+#     var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
+#                                    "id", "/moderator"^^name);
+#     ()
+#   }
+#
+#   fun makeOptions(names) {
+#     switch(names) {
+#       case [] -> ()
+#       case x::xs -> makeOption(x); makeOptions(xs)
+#     }
+#   }
+#
+#   receive {
+#     case NewUser(name) ->
+#       makeOption(name);
+#       moderatorHandler(channel)
+#     case UserLeft(name) ->
+#       removeNode(getNodeById("/moderator"^^name));
+#       moderatorHandler(channel)
+#     case Remove() ->
+#       var selectedUser = getInputContents("clientSelect");
+#       if (selectedUser == "") {
+#         print("No option has been selected");
+#         moderatorHandler(channel)
+#       } else {
+#         var channel = send(Nickname(selectedUser), select RemoveUser channel);
+#         moderatorHandler(channel)
+#       }
+#     case Mute() ->
+#       var selectedUser = getInputContents("clientSelect");
+#       if (selectedUser == "") {
+#         print("No option has been selected");
+#         moderatorHandler(channel)
+#       } else {
+#         var channel = send(Nickname(selectedUser), select MuteUser channel);
+#         moderatorHandler(channel)
+#       }
+#     case MakeModerator() ->
+#       var selectedUser = getInputContents("clientSelect");
+#       if (selectedUser == "") {
+#         print("No option has been selected");
+#         moderatorHandler(channel)
+#       } else {
+#         var channel = send(Nickname(selectedUser),
+#                       select MakeModerator channel);
+#         moderatorHandler(channel)
+#       }
+#     case MakeMeModerator(names) ->
+#       print("Became a moderator");
+#       domReplaceChildren(makeAdminBox(self()),
+#                       getNodeById("adminBox_placehodler"));
+#       makeOptions(names);
+#       moderatorHandler(channel)
+#   }
+#  }
 
 
   fun displayChat(room, topic, clientSend, clientReceive, moderatorChan) {
@@ -117,7 +117,7 @@ fun mainPage(ap) {
     fun changeTopic(topic) {
       var topicNode = getNodeById("topic");
       var to_add = <#><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></#>;
-      replaceChildren(to_add, topicNode)
+      domReplaceChildren(to_add, topicNode)
     }
 
     fun removeUser(nick) {
@@ -138,33 +138,34 @@ fun mainPage(ap) {
     fun incomingMsgLoop(s) {
       offer(s) {
         case IncomingChatMessage(s) ->
-          var ((Nickname(nick), Message(chatmsg)), s) = receive(s);
+          var ((nick, chatmsg), s) = receive(s);
           debug("Received incoming chat message (" ^^ chatmsg ^^ ") from (" ^^ nick ^^ ")");
           addChatMsg(nick, chatmsg);
           incomingMsgLoop(s)
         case NewUser(s) ->
-          var (Nickname(nick), s) = receive(s);
-          moderatorPid ! NewUser(nick);
+          var (nick, s) = receive(s);
+          # moderatorPid ! NewUser(nick);
           addNewUser(nick);
           incomingMsgLoop(s)
         case NewTopic(s) ->
-          var (Topic(topic), s) = receive(s);
+          var (topic, s) = receive(s);
           changeTopic(topic);
           incomingMsgLoop(s)
         case UserLeft(s) ->
-          var (Nickname(nick), s) = receive(s);
-          moderatorPid ! UserLeft(nick);
+          var (nick, s) = receive(s);
+          # moderatorPid ! UserLeft(nick);
           removeUser(nick); # Poor Nick
           incomingMsgLoop(s)
         case UserMuted(s) ->
-          var (Nickname(nick), s) = receive(s);
+          var (nick, s) = receive(s);
           muteUser(nick);
           incomingMsgLoop(s)
         case UserUnmuted(s) ->
-          var (Nickname(nick), s) = receive(s);
+          var (nick, s) = receive(s);
           unmuteUser(nick);
           incomingMsgLoop(s)
-        case BecomeModerator(chan) ->
+        case BecomeModerator(s) ->
+          var (chan, s) = receive(s);
           cancel(chan); # FIXME: FOR NOW ONLY!
           incomingMsgLoop(s)
         case Kick(_) ->
@@ -174,6 +175,7 @@ fun mainPage(ap) {
       }
     }
 
+    sig outgoingMsgLoop : (ClientSend, Maybe(ModeratorSend)) ~> ()
     fun outgoingMsgLoop(clientSend, moderatorChan) {
       fun isTopicCmd(str) {
         (charAt(str, 0) == '/') &&
@@ -190,27 +192,28 @@ fun mainPage(ap) {
 
       if (isTopicCmd(str)) {
         var clientSend = select ChangeTopic clientSend;
-        var clientSend = send(Topic(getTopic(str)), clientSend);
+        var clientSend = send(getTopic(str), clientSend);
         outgoingMsgLoop(clientSend, moderatorChan)
       } else {
         var clientSend = select ChatMessage clientSend;
         var clientSend = send(str, clientSend);
         outgoingMsgLoop(clientSend, moderatorChan)
       }
+      # TODO: Leaving chat room
     }
 
 
     fun chatBox() {
       fun submit() {
-        send(getInputContents(chat_box_id), request(outgoingAP));
+        var _ = send(getInputContents(chat_box_id), request(outgoingAP));
         clearInput(chat_box_id)
       }
 
       <#>
         <div id="chatBox">
           <div id="adminBox_placehodler"></div>
-          <div id="topic"><p><span class="lead"><b>Room: </b>{stringToXml(roomStr)}</span></p></div>
-          <div id="topic"><p><span class="lead"><b>Topic: </b>{stringToXml(topicStr)}</span></p></div>
+          <div id="topic"><p><span class="lead"><b>Room: </b>{stringToXml(room)}</span></p></div>
+          <div id="topic"><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></div>
           <div id="msgs" style="overflow-y:scroll; width:100%; height:400px;"></div>
           <div>
             <form l:onsubmit="{submit()}">
@@ -226,12 +229,12 @@ fun mainPage(ap) {
     ignore(spawnClient { outgoingMsgLoop(clientSend, moderatorChan)});
 
     # Spawn process which handles incoming messages from the server
-    ignore(spawnClient { incomingMsgLoop(incomingMsgChan) });
+    ignore(spawnClient { incomingMsgLoop(clientReceive) });
 
     # Finally, remove the name request box, put the chatbox in, and start off
-    replaceChildren(chatBox(), getNodeById("main"));
+    domReplaceChildren(chatBox(), getNodeById("main"));
     # TODO: Add moderator handler box back in
-    #if (is_mod) replaceChildren(makeAdminBox(modHandler),
+    #if (is_mod) domReplaceChildren(makeAdminBox(modHandler),
     #                            getNodeById("adminBox_placehodler"))
     #else ()
   }
@@ -268,7 +271,7 @@ fun mainPage(ap) {
       }
     }
 
-    fun roomSelectLoop(s) {
+    fun roomSelectLoop(s, roomCount) {
       fun getRoomName(n) {
         if (n == 0) {
           getInputContents("newRoomText")
@@ -288,17 +291,17 @@ fun mainPage(ap) {
       var roomName = getRoomName(roomCount);
       if (roomName == "") {
         print("Please enter a valid room name");
-        roomSelectLoop(s)
+        roomSelectLoop(s, roomCount)
       } else {
-        var s = send(nickname, roomName, s);
+        var s = send((nickname, roomName), s);
         offer(s) {
-          case Joined ->
-            var (topic, clientReceive) = receive(s);
-            displayChat(roomName, topic, s, clientReceive, None)
-          case JoinedAsModerator ->
-            var (topic, clientReceive, modSend) = receive(s);
+          case Joined(s) ->
+            var ((topic, clientReceive), s) = receive(s);
+            displayChat(roomName, topic, s, clientReceive, Nothing)
+          case JoinedAsModerator(s) ->
+            var ((topic, clientReceive, modSend), s) = receive(s);
             displayChat(roomName, topic, s, clientReceive, Just(modSend))
-          case Nope ->
+          case Nope(s) ->
             var (err, _) = receive(s);
             print(errToString(err));
             # Try again.
@@ -308,10 +311,10 @@ fun mainPage(ap) {
     }
 
     fun makeRoomForm(rooms) {
-      fun makeRadioRec(rooms, isFirst) {
+      fun makeRadioRec(rooms, i) {
         switch(rooms) {
           case [] ->
-            if (isFirst) {
+            if (i == 0) {
             <#>
              <div class="radio">
                 <label>
@@ -334,10 +337,10 @@ fun mainPage(ap) {
             </#>
             }
           case x::xs ->
-            var roomId = "room" ^^ (stringOfInt(i));
+            var roomId = "room" ^^ (intToString(i));
             # If radio button is the first, it's checked by default
             var component =
-              if (isFirst) {
+              if (i == 0) {
                 <#>
                   <input type="radio" name="roomName"
                     id="{roomId}" value="{x}" checked="checked" />
@@ -353,10 +356,10 @@ fun mainPage(ap) {
               <div class="radio">
                 <label>
                   { component }
-                  { stringToXml(roomStr) }
+                  { stringToXml(x) }
                 </label>
               </div>
-              { makeRadioRec(xs, false) }
+              { makeRadioRec(xs, i + 1) }
             </#>
         }
       }
@@ -368,7 +371,7 @@ fun mainPage(ap) {
               </label>
               <input type="text" id="nickname" />
             </div>
-            { makeRadioRec(rooms, true) }
+            { makeRadioRec(rooms, 0) }
             <div>
               <input type="submit" name="submitButton" value="Join" />
             </div>
@@ -382,7 +385,7 @@ fun mainPage(ap) {
     # get all available rooms from the server and pick one via radio buttons
 
     # First: request from the AP to get a ClientConnect AP
-    var s = request(ap);
+    var (s: ClientConnect) = request(ap);
     # Next, grab the list of rooms
     var (rooms, s) = receive(s);
 
@@ -391,7 +394,7 @@ fun mainPage(ap) {
     replaceNode(generated_radio_dom, getNodeById("room_placeholder"));
 
     # Finally, handle room selection
-    roomSelectLoop(s);
+    roomSelectLoop(s, length(rooms));
   }
 
   fun start() {

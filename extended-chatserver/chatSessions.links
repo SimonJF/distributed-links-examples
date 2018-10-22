@@ -19,13 +19,13 @@ typename ModeratorReceive = ~ModeratorSend;
 
 # Messages received by a connected client
 typename ClientReceive =
-  [&| IncomingChatMessage : !(Nickname, Message) . ClientReceive,
-      UserJoined : ?(Nickname) . ClientReceive,
+  [&| IncomingChatMessage : ?(Nickname, Message) . ClientReceive,
+      NewUser : ?(Nickname) . ClientReceive,
       NewTopic : ?(Topic) . ClientReceive,
       UserLeft : ?(Nickname) . ClientReceive,
       UserMuted : ?(Nickname) . ClientReceive,
       UserUnmuted : ?(Nickname) . ClientReceive,
-      BecomeModerator : ?ModeratorReceive . ClientReceive,
+      BecomeModerator : ?ModeratorSend . ClientReceive,
       Kick : End
   |&];
 
@@ -38,7 +38,7 @@ typename ClientConnect =
   ?([RoomName]).!(RoomName, Nickname).
     [&| Joined: ?(Topic, ClientReceive) . ClientSend,
         JoinedAsModerator: ?(Topic, ClientReceive, ModeratorSend). ClientSend,
-        Nope: !ConnectError.End
+        Nope: ?ConnectError.End
     |&];
 
 typename ServerAccept = ~ClientConnect;
