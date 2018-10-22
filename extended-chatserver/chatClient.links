@@ -273,14 +273,15 @@ fun mainPage() {
 
     fun roomSelectLoop(s, roomCount) {
       fun getRoomName(n) {
-        if (n == 0) {
-          getInputContents("newRoomText")
+        if (n == roomCount) {
+          getInputContents("newRoomName")
         } else {
           var domRef = getNodeById("room" ^^ intToString(n));
-          if (domHasAttribute(domRef, "checked")) {
+          # Stringly-typed, gotta love it
+          if (domGetPropertyFromRef(domRef, "checked") == "true") {
             domGetPropertyFromRef(domRef, "value")
           } else {
-            getRoomName(n - 1)
+            getRoomName(n + 1)
           }
         }
       }
@@ -288,12 +289,12 @@ fun mainPage() {
       # Wait for the form to be submitted
       ignore(accept(roomFormAP));
       var nickname = getInputContents("nickname");
-      var roomName = getRoomName(roomCount);
-      if (roomName == "") {
-        print("Please enter a valid room name");
+      var roomName = getRoomName(0);
+      if (roomName == "" || nickname == "") {
+        print("Please enter a valid room name and nickname");
         roomSelectLoop(s, roomCount)
       } else {
-        var s = send((nickname, roomName), s);
+        var s = send((roomName, nickname), s);
         offer(s) {
           case JoinedOK(s) ->
             var ((topic, clientReceive), s) = receive(s);
@@ -318,9 +319,9 @@ fun mainPage() {
             <#>
              <div class="radio">
                 <label>
-                  <input type="radio" name="roomName" id="newRoom" value="newRoom" />
+                  <input type="radio" name="roomName" id="newRoom" value="newRoom" checked="checked" />
                   New Room
-                  <input type="text" id="newRoomName"  disabled="disabled"></input>
+                  <input type="text" id="newRoomName" ></input>
                 </label>
               </div>
             </#>
@@ -329,7 +330,7 @@ fun mainPage() {
              <div class="radio">
                 <label>
                   <input type="radio" name="roomName"
-                    id="newRoom" value="newRoom" checked="checked" />
+                    id="newRoom" value="newRoom"  />
                   New Room
                   <input type="text" id="newRoomName" />
                 </label>
@@ -369,7 +370,7 @@ fun mainPage() {
               <label for="nickname">
                 Nickname
               </label>
-              <input type="text" id="nickname" />
+              <input type="text" id="nickname" autofocus="true" />
             </div>
             { makeRadioRec(rooms, 0) }
             <div>
@@ -391,7 +392,7 @@ fun mainPage() {
 
     # Next, populate the placeholder with the received rooms
     var generated_radio_dom = makeRoomForm(rooms);
-    replaceNode(generated_radio_dom, getNodeById("room_placeholder"));
+    domReplaceChildren(generated_radio_dom, getNodeById("room_placeholder"));
 
     # Finally, handle room selection
     roomSelectLoop(s, length(rooms));

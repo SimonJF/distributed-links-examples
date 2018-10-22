@@ -108,37 +108,33 @@ module Room {
     offer(s) {
       case JoinRequest(s) ->
         var (nick, s) = receive(s);
-        var _ = send(UsernameTaken, s);
-        loop(state, clients)
-     #case JoinRequest(s) ->
-     #  var (nick, s) = receive(s);
-     #  # If username is already taken, let the client know
-     #  if (List.contains(nick, state.nicknames)) {
-     #    var _ = send(UsernameTaken, s);
-     #    loop(state, clients)
-     #  } else {
-     #    # Otherwise, check if that username is a moderator.
-     #    if (List.contains(nick, state.moderators)) {
-     #      var (roomSend, clientReceive) = createRoomSend();
-     #      var moderatorSend = Moderator.create(state.ap);
-     #      # Broadcast that the user has joined
-     #      var clients = broadcastJoined(nick, clients);
-     #      var _ =
-     #        send(JoinedAsModerator(state.topic,
-     #          clientReceive, moderatorSend), s);
-     #      loop((state with
-     #        nicknames=nick :: state.nicknames),
-     #        LinCons(roomSend, clients))
-     #    } else {
-     #      var (roomSend, clientReceive) = createRoomSend();
-     #      var clients = broadcastJoined(nick, clients);
-     #      var _ = send(Joined(state.topic, clientReceive), s);
-     #      var state =
-     #        (state with
-     #          nicknames=nick :: state.nicknames);
-     #      loop(state, LinCons(roomSend, clients))
-     #    }
-     #  }
+        # If username is already taken, let the client know
+        if (List.contains(nick, state.nicknames)) {
+          var _ = send(UsernameTaken, s);
+          loop(state, clients)
+        } else {
+          # Otherwise, check if that username is a moderator.
+          if (List.contains(nick, state.moderators)) {
+            var (roomSend, clientReceive) = createRoomSend();
+            var moderatorSend = Moderator.create(state.ap);
+            # Broadcast that the user has joined
+            var clients = broadcastJoined(nick, clients);
+            var _ =
+              send(JoinedAsModerator(state.topic,
+                clientReceive, moderatorSend), s);
+            loop((state with
+              nicknames=nick :: state.nicknames),
+              LinCons(roomSend, clients))
+          } else {
+            var (roomSend, clientReceive) = createRoomSend();
+            var clients = broadcastJoined(nick, clients);
+            var _ = send(Joined(state.topic, clientReceive), s);
+            var state =
+              (state with
+                nicknames=nick :: state.nicknames);
+            loop(state, LinCons(roomSend, clients))
+          }
+        }
       case Chat(s) ->
         var ((nick, msg), _) = receive(s);
         var clients = linMap(fun(s) {
@@ -170,13 +166,11 @@ module Room {
 
   sig join : (RoomHandle, Nickname) ~> RoomJoinResponse
   fun join(ap, nick) {
-   #var s = request(ap);
-   #var s = select JoinRequest s;
-   #var s = send(nick, s);
-   #var (res, _) = receive(s);
-   #res
-   UsernameTaken
-
+    var s = request(ap);
+    var s = select JoinRequest s;
+    var s = send(nick, s);
+    var (res, _) = receive(s);
+    res
   }
 
   sig create : (RoomName) ~> RoomHandle
@@ -255,20 +249,20 @@ module RoomManager {
 
   # Main loop for the room manager
   fun init() {
+
+    fun getJoinResult(roomAp, nick) {
+      switch(Room.join(roomAp, nick)) {
+        case UsernameTaken -> UsernameTaken
+        case InvalidRoom -> InvalidRoom
+        case Joined(topic, cr) -> Joined(topic, cr, roomAp)
+        case JoinedAsModerator(topic, cr, ms) ->
+          JoinedAsModerator(topic, cr, ms, roomAp)
+      }
+    }
+
     fun loop(rooms) {
       var s = accept(managerAP);
       offer(s) {
-       #case AddRoom(s) ->
-       #  var (name, s) = receive(s);
-       #  # Create room if it doesn't exist, notify client of outcome
-       #  if (roomExists(name)) {
-       #    var room = Room.create(name);
-       #    var _ = send(true, s);
-       #    loop(rooms ++ [room])
-       #  } else {
-       #    var _ = send(false, s);
-       #    loop(rooms)
-       #  }
         case RemoveRoom(s) ->
           var (roomName, _) = receive(s);
           loop(deleteRoom(roomName, rooms))
@@ -279,20 +273,12 @@ module RoomManager {
           var ((nick, roomName), s) = receive(s);
           switch(lookupRoom(roomName, rooms)) {
             case Just(roomAp) ->
-              var joinResult =
-                switch(Room.join(roomAp, nick)) {
-                  case UsernameTaken -> UsernameTaken
-                  case InvalidRoom -> InvalidRoom
-                  case Joined(topic, cr) -> Joined(topic, cr, roomAp)
-                  case JoinedAsModerator(topic, cr, ms) ->
-                    JoinedAsModerator(topic, cr, ms, roomAp)
-                };
-              var _ = send(joinResult, s);
+              var _ = send(getJoinResult(roomAp, nick), s);
               loop(rooms)
             case Nothing ->
-              # TODO: This should instead create the room
-              var _ = send(InvalidRoom, s);
-              loop(rooms)
+              var roomAp = Room.create(roomName);
+              var _ = send(getJoinResult(roomAp, nick), s);
+              loop(rooms ++ [(roomName, roomAp)])
           }
       }
     }
