@@ -28,7 +28,7 @@ typename ClientConnect =
   ?([RoomName]).!(RoomName, Nickname).
     [&| Joined: ?(Topic, ClientReceive) . ClientSend,
         JoinedAsModerator: ?(Topic, ClientReceive, ModeratorSend). ClientSend,
-        Nope: !ConnectError.End
+        Nope: !ConnectError.ClientConnect
     |&];
 
 typename ModeratorSend  =

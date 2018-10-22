@@ -24,10 +24,6 @@ module DomFunctions {
 open DomFunctions
 
 
-typename ReceiveRoomSelectAction =
-  [&|
-      
-
 fun mainPage(ap) {
   # loop that receives input from
   # 1. the client (moderator) about removing and muting clients
@@ -97,7 +93,7 @@ fun mainPage(ap) {
   }
 
 
-  fun displayChatBox(room, topic, is_mod, incomingMsgChan, moderatorChan, outgoingMsgChan) {
+  fun displayChat(room, topic, clientSend, clientReceive, moderatorChan) {
     var Room(roomStr) = room;
     var Topic(topicStr) = topic;
 
@@ -265,103 +261,144 @@ fun mainPage(ap) {
     </#>
   }
 
-  fun nameBox(channel) {
-    fun handleSubmitName(s) {
-        var nick = getInputContents(nickname_box_id);
-        clearInput(nickname_box_id);
-        var s = send(Nickname(nick), s);
-        var ((room, topic, is_mod, incomingMsgChan, moderatorChan), s) =
-          receive(s);
-        displayChatBox(room, topic, is_mod, incomingMsgChan, moderatorChan, s)
+  fun chooseRoom(ap) {
+    var roomFormAP = new();
+
+    fun submitRoom() {
+      ignore(request(roomFormAP));
     }
 
-    var nameHandler =
-      spawnClient { receive { case _ -> handleSubmitName(channel) } };
-    replaceNode(<#>
-                  <div id="nameBox">
-                    <p>Nickname:</p>
-                    <form l:onsubmit="{nameHandler ! ()}">
-                      <input id="name_box" type="text" autofocus="autofocus">
-                      </input>
-                    </form>
-                  </div>
-                </#>,
-                getNodeById("roomSelect"))
-  }
+    fun errToString(err) {
+      switch(err) {
+        case NameInUse -> "That nickname is already in use."
+        case BadRoom -> "There was an error connecting to that room."
+      }
+    }
 
-  fun chooseRoom(ap) {
-    fun makeRoomForm(rooms, handlerFn) {
-      fun makeRadioRec(rooms) {
-            switch(rooms) {
-              case [] -> <#></#>
-              case x::xs ->
-                var Room(roomStr) = x;
-                <#>
-                  <input type="radio" name="room"
-                    l:onchange="{ handlerFn ! Room(roomStr)}"/>
-                    { stringToXml(roomStr) } <br/>
-                  { makeRadioRec(xs) }
-                </#>
-            }
+    fun roomSelectLoop(s) {
+      fun getRoomName(n) {
+        if (n == 0) {
+          getInputContents("newRoomText")
+        } else {
+          var domRef = getNodeById("room" ^^ intToString(n));
+          if (domHasAttribute(domRef, "checked")) {
+            domGetPropertyFromRef(domRef, "value")
+          } else {
+            getRoomName(n - 1)
           }
+        }
+      }
+
+      # Wait for the form to be submitted
+      ignore(accept(roomFormAP));
+      var nickname = getInputContents("nickname");
+      var roomName = getRoomName(roomCount);
+      if (roomName == "") {
+        print("Please enter a valid room name");
+        roomSelectLoop(s)
+      } else {
+        var s = send(nickname, roomName, s);
+        offer(s) {
+          case Joined ->
+            var (topic, clientReceive) = receive(s);
+            displayChat(roomName, topic, s, clientReceive, None)
+          case JoinedAsModerator ->
+            var (topic, clientReceive, modSend) = receive(s);
+            displayChat(roomName, topic, s, clientReceive, Just(modSend))
+          case Nope ->
+            var (err, _) = receive(s);
+            print(errToString(err));
+            # Try again.
+            chooseRoom(ap)
+        }
+      }
+    }
+
+    fun makeRoomForm(rooms) {
+      fun makeRadioRec(rooms, isFirst) {
+        switch(rooms) {
+          case [] ->
+            if (isFirst) {
+            <#>
+             <div class="radio">
+                <label>
+                  <input type="radio" name="roomName" id="newRoom" value="newRoom" />
+                  New Room
+                  <input type="text" id="newRoomName"  disabled />
+                </label>
+              </div>
+            </#>
+            } else {
+            <#>
+             <div class="radio">
+                <label>
+                  <input type="radio" name="roomName"
+                    id="newRoom" value="newRoom" checked />
+                  New Room
+                  <input type="text" id="newRoomName" />
+                </label>
+              </div>
+            </#>
+            }
+          case x::xs ->
+            var roomId = "room" ^^ (stringOfInt(i));
+            # If radio button is the first, it's checked by default
+            var component =
+              if (isFirst) {
+                <#>
+                  <input type="radio" name="roomName"
+                    id="{roomId}" value="{x}" checked />
+                </#>
+              } else {
+                <#>
+                  <input type="radio" name="roomName"
+                    id="{roomId}" value="{x}" />
+                </#>
+              };
+
+            <#>
+              <div class="radio">
+                <label>
+                  { component }
+                  { stringToXml(roomStr) }
+                </label>
+              </div>
+              { makeRadioRec(xs, false) }
+            </#>
+        }
+      }
       <#>
-        <form id="rooms" l:onsubmit="{ handlerFn ! Submit()}">
-            <input id="startButton" type="radio" name="room" checked="checked"
-                   l:onchange="{ handlerFn ! Room("/newRoom")}"/> New
-            <input id="newRoomText" type="text" value=""/><br/>
-              { makeRadioRec(rooms) }
-            <p>
-              <input type="submit" name="submitButton" value="Enter"/>
-            </p>
+        <form id="roomForm" l:onsubmit="{ submitRoom() }">
+            <div>
+              <label for="nickname">
+                Nickname
+              </label>
+              <input type="text" id="nickname" />
+            </div>
+            { makeRadioRec(rooms, true) }
+            <div>
+              <input type="submit" name="submitButton" value="Join" />
+            </div>
         </form>
       </#>
     }
 
-    fun roomSelectLoop(s, roomStr, rooms) {
-      fun member(elem , l) {
-        switch(l) {
-          case [] -> false
-          case (x::xs) -> x == elem || member(elem, xs)
-        }
-      }
-
-      receive {
-        case Room(roomStr) ->
-          roomSelectLoop(s, roomStr, rooms)
-        # if the user wants to create a new room, extract the room name from
-        # the text field
-        case Submit() ->
-          if (roomStr == "/newRoom") {
-            var roomStr = getInputContents("newRoomText");
-            if (roomStr == "" || member(Room(roomStr), rooms))
-              roomSelectLoop(s, roomStr, rooms)
-            else
-              nameBox(send(Room(roomStr), s))
-          } else {
-            nameBox(send(Room(roomStr), s))
-          }
-        }
-    }
-
-    # keeps track of the radio button currently clicked
-    # (TODO: extract the information from DomNodes after submission)
-    # At submission, sends the roomname to the server and proceeds to name setup
-    fun doSetup(roomStr) {
-      # Request from the AP to get a ClientConnect AP
-      var s = request(ap);
-      # Next, grab the list of rooms
-      var (rooms, s) = receive(s);
-      # Spawn the handler function which will handle the room selection
-      # and any updates from the DOM
-      var roomHandler = spawnClient { roomSelectLoop(s, roomStr, rooms) };
-
-      # Next, populate the placeholder with the received rooms
-      var generated_radio_dom = makeRoomForm(rooms, roomHandler);
-      replaceNode(generated_radio_dom, getNodeById("room_placeholder"));
-    }
-
+    # At submission, sends the room name and nickname to the server,
+    # checks the response from the server, and either shows an error
+    # and repeats, or proceeds to the main chat application
     # get all available rooms from the server and pick one via radio buttons
-    doSetup("/newRoom");
+
+    # First: request from the AP to get a ClientConnect AP
+    var s = request(ap);
+    # Next, grab the list of rooms
+    var (rooms, s) = receive(s);
+
+    # Next, populate the placeholder with the received rooms
+    var generated_radio_dom = makeRoomForm(rooms);
+    replaceNode(generated_radio_dom, getNodeById("room_placeholder"));
+
+    # Finally, handle room selection
+    roomSelectLoop(s);
   }
 
   fun start() {
