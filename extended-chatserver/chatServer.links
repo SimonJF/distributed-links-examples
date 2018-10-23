@@ -77,7 +77,6 @@ module Room {
   typename RoomState =
     (name:String,
      topic:String,
-     nicknames:[Nickname],
      ap:RoomHandle);
 
   # Gets us a pair of (RoomSend, ~RoomSend) endpoints.
@@ -100,7 +99,7 @@ module Room {
 
     sig broadcastJoined : (Nickname, LinList((String, RoomSend))) ~> LinList((String, RoomSend))
     fun broadcastJoined(nick, clients) {
-      linMap(fun(s) {
+      AssocLinList.map(fun(s) {
         var s = select NewUser s;
         send(nick, s)
       }, clients)
@@ -124,57 +123,53 @@ module Room {
       case JoinRequest(s) ->
         var (nick, s) = receive(s);
         # If username is already taken, let the client know
-        if (List.contains(nick, state.nicknames)) {
+        var (nickTaken, clients) =
+          AssocLinList.contains(nick, clients);
+        if (nickTaken) {
           var _ = send(UsernameTaken, s);
           loop(state, clients)
         } else {
           # Otherwise, check if the user is the only one in the room.
           # If so, make them moderator
-          if (state.nicknames == []) {
+          var (isEmpty, clients) = AssocLinList.isEmpty(clients);
+          if (isEmpty) {
             var (roomSend, clientReceive) = createRoomSend();
             var moderatorSend = Moderator.create(state.ap);
-            # Broadcast that the user has joined
-            var clients = broadcastJoined(nick, clients);
             var _ =
               send(JoinedAsModerator(state.topic,
                 clientReceive, moderatorSend), s);
-            loop((state with
-              nicknames=nick :: state.nicknames),
-              LinCons((nick, roomSend), clients))
+            loop(state, LinCons((nick, roomSend), clients))
           } else {
             var (roomSend, clientReceive) = createRoomSend();
             var clients = broadcastJoined(nick, clients);
             var _ = send(Joined(state.topic, clientReceive), s);
-            var state =
-              (state with
-                nicknames=nick :: state.nicknames);
             loop(state, LinCons((nick, roomSend), clients))
           }
         }
       case Chat(s) ->
         var ((nick, msg), _) = receive(s);
-        var clients = linMap(fun(s) {
+        var clients = AssocLinList.map(fun(s) {
           var s = select IncomingChatMessage s;
           send ((nick, msg), s)
         }, clients);
         loop(state, clients)
       case NewTopic(s) ->
         var (newTopic, _) = receive(s);
-        var clients = linMap(fun(s) {
+        var clients = AssocLinList.map(fun(s) {
           var s = select NewTopic s;
           send(newTopic, s)
         }, clients);
         loop((state with topic=newTopic), clients)
       case Leave(s) ->
         var (name, _) = receive(s);
-        var clients = linMap(fun(s) {
+        var clients = AssocLinList.map(fun(s) {
           var s = select UserLeft s;
           send(name, s)
         }, clients);
         loop(state, clients)
       case KickUser(s) ->
         var (name, _) = receive(s);
-        var clients = linMap(fun(s) {
+        var clients = AssocLinList.map(fun(s) {
           var s = select UserLeft s;
           send(name, s)
         }, clients);
@@ -182,7 +177,7 @@ module Room {
         loop(state, clients)
       case MuteUser(s) ->
         var (name, _) = receive(s);
-        var clients = linMap(fun(s) {
+        var clients = AssocLinList.map(fun(s) {
           var s = select UserMuted s;
           send(name, s)
         }, clients);
@@ -195,7 +190,7 @@ module Room {
       case Kill(s) ->
         # Since after selecting Kick, all elements will be of type End
         # (and therefore unrestricted), we can dispose of `clients`.
-        var _ = linMap(fun(s) { select Kick s }, clients);
+        var _ = AssocLinList.map(fun(s) { select Kick s }, clients);
         () # Stop evaluating
     }
   }
@@ -213,8 +208,7 @@ module Room {
   fun create(roomName) {
     var (ap: RoomHandle) = new();
     var (state: RoomState) =
-      (name=roomName, topic="Hello, world!", nicknames=[],
-       ap=ap);
+      (name=roomName, topic="Hello, world!", ap=ap);
     var _ = spawn { loop(state, LinNil) };
     ap
   }
@@ -265,11 +259,11 @@ module RoomManager {
 
 
   fun roomExists(roomName, rooms) {
-    StringAssocList.contains(roomName, rooms)
+    AssocList.contains(roomName, rooms)
   }
 
   fun lookupRoom(roomName, rooms) {
-    StringAssocList.lookup(roomName, rooms)
+    AssocList.lookup(roomName, rooms)
   }
 
   fun deleteRoom(roomName, rooms) {
