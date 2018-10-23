@@ -28,6 +28,10 @@ typename RoomReceive =
       Chat: ?(Nickname, Message).End,
       NewTopic: ?Topic          .End,
       Leave: ?Nickname          .End,
+      # Messages sent from moderator worker
+      KickUser: ?Nickname       .End,
+      MuteUser: ?Nickname       .End,
+      MakeModerator: ?Nickname  .End,
       # Messages sent from room manager
       JoinRequest: ?Nickname.!RoomJoinResponse.End,
       Kill: End
@@ -50,21 +54,22 @@ module Moderator {
       offer(s) {
         case KickUser(s) ->
           var (nick, s) = receive(s);
-          # TODO: send message to AP here
+          # Mutually-recursive modules don't work, so we will
+          # need to send the messages manually.
+          ignore(send(nick, select KickUser (request(roomAp))));
           loop(s)
         case MuteUser(s) ->
           var (nick, s) = receive(s);
-          # TODO: send message to AP here
+          ignore(send(nick, select MuteUser (request(roomAp))));
           loop(s)
         case MakeModerator(s) ->
           var (nick, s) = receive(s);
-          # TODO: send message to AP here
+          ignore(send(nick, select MakeModerator (request(roomAp))));
           loop(s)
       }
     }
     fork(loop)
   }
-
 }
 
 module Room {
@@ -73,7 +78,6 @@ module Room {
     (name:String,
      topic:String,
      nicknames:[Nickname],
-     moderators:[Nickname],
      ap:RoomHandle);
 
   # Gets us a pair of (RoomSend, ~RoomSend) endpoints.
@@ -91,10 +95,10 @@ module Room {
     (ep1, ep2)
   }
 
-  sig loop : (RoomState, LinList(RoomSend)) ~> ()
+  sig loop : (RoomState, LinList((Nickname, RoomSend))) ~> ()
   fun loop(state, clients) {
 
-    sig broadcastJoined : (Nickname, LinList(RoomSend)) ~> LinList(RoomSend)
+    sig broadcastJoined : (Nickname, LinList((String, RoomSend))) ~> LinList((String, RoomSend))
     fun broadcastJoined(nick, clients) {
       linMap(fun(s) {
         var s = select NewUser s;
@@ -104,6 +108,18 @@ module Room {
 
     var s = accept(state.ap);
 
+    fun kickUser(nick, clients) {
+      clients
+    }
+
+    fun muteUser(nick, clients) {
+      clients
+    }
+
+    fun makeModerator(nick, clients) {
+      clients
+    }
+
     offer(s) {
       case JoinRequest(s) ->
         var (nick, s) = receive(s);
@@ -112,8 +128,9 @@ module Room {
           var _ = send(UsernameTaken, s);
           loop(state, clients)
         } else {
-          # Otherwise, check if that username is a moderator.
-          if (List.contains(nick, state.moderators)) {
+          # Otherwise, check if the user is the only one in the room.
+          # If so, make them moderator
+          if (state.nicknames == []) {
             var (roomSend, clientReceive) = createRoomSend();
             var moderatorSend = Moderator.create(state.ap);
             # Broadcast that the user has joined
@@ -123,7 +140,7 @@ module Room {
                 clientReceive, moderatorSend), s);
             loop((state with
               nicknames=nick :: state.nicknames),
-              LinCons(roomSend, clients))
+              LinCons((nick, roomSend), clients))
           } else {
             var (roomSend, clientReceive) = createRoomSend();
             var clients = broadcastJoined(nick, clients);
@@ -131,7 +148,7 @@ module Room {
             var state =
               (state with
                 nicknames=nick :: state.nicknames);
-            loop(state, LinCons(roomSend, clients))
+            loop(state, LinCons((nick, roomSend), clients))
           }
         }
       case Chat(s) ->
@@ -155,6 +172,26 @@ module Room {
           send(name, s)
         }, clients);
         loop(state, clients)
+      case KickUser(s) ->
+        var (name, _) = receive(s);
+        var clients = linMap(fun(s) {
+          var s = select UserLeft s;
+          send(name, s)
+        }, clients);
+        var clients = kickUser(name, clients);
+        loop(state, clients)
+      case MuteUser(s) ->
+        var (name, _) = receive(s);
+        var clients = linMap(fun(s) {
+          var s = select UserMuted s;
+          send(name, s)
+        }, clients);
+        var clients = muteUser(name, clients);
+        loop(state, clients)
+      case MakeModerator(s) ->
+        var (name, _) = receive(s);
+        var clients = makeModerator(name, clients);
+        loop(state, clients)
       case Kill(s) ->
         # Since after selecting Kick, all elements will be of type End
         # (and therefore unrestricted), we can dispose of `clients`.
@@ -177,7 +214,7 @@ module Room {
     var (ap: RoomHandle) = new();
     var (state: RoomState) =
       (name=roomName, topic="Hello, world!", nicknames=[],
-       moderators=[], ap=ap);
+       ap=ap);
     var _ = spawn { loop(state, LinNil) };
     ap
   }
