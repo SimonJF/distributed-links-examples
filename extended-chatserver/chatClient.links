@@ -82,10 +82,9 @@ module OutgoingMessageHandler {
         KickUser: ?Nickname.End,
         BecomeModerator: ?ModeratorSend.End |&];
 
-  sig outgoingAP : AP(OutgoingMessage)
-  var outgoingAP = new();
-
   fun init(clientSend, modSend) {
+    var (outgoingAP: AP(OutgoingMessage)) = new();
+
     fun loop(clientSend, modSend) {
      fun isTopicCmd(str) {
         (charAt(str, 0) == '/') &&
@@ -133,14 +132,15 @@ module OutgoingMessageHandler {
           loop(clientSend, modSend)
       }
     }
-    ignore(spawnClient { loop(clientSend, modSend) })
+    ignore(spawnClient { loop(clientSend, modSend) });
+    outgoingAP
   }
 
   fun asynchronously(f) {
     ignore(spawnClient { f() })
   }
 
-  fun chatMessage(msg) {
+  fun chatMessage(outgoingAP, msg) {
     asynchronously(fun() {
       var s = request(outgoingAP);
       var s = select ChatMessage s;
@@ -148,7 +148,7 @@ module OutgoingMessageHandler {
     })
   }
 
-  fun muteUser(nick) {
+  fun muteUser(outgoingAP, nick) {
     asynchronously(fun() {
       var s = request(outgoingAP);
       var s = select MuteUser s;
@@ -156,7 +156,7 @@ module OutgoingMessageHandler {
     })
   }
 
-  fun kickUser(nick) {
+  fun kickUser(outgoingAP, nick) {
     asynchronously(fun() {
       var s = request(outgoingAP);
       var s = select KickUser s;
@@ -164,7 +164,7 @@ module OutgoingMessageHandler {
     })
   }
 
-  fun becomeModerator(modChan) {
+  fun becomeModerator(outgoingAP, modChan) {
     ignore(spawnClient {
       var s = request(outgoingAP);
       var s = select BecomeModerator s;
@@ -293,9 +293,9 @@ fun mainPage() {
 
   fun displayChat(room, topic, clientSend, clientReceive, moderatorChan) {
 
-    fun chatBox() {
+    fun chatBox(outgoingAP) {
       fun submit() {
-        OutgoingMessageHandler.chatMessage(DomFunctions.getInputContents(DomFunctions.chat_box_id));
+        OutgoingMessageHandler.chatMessage(outgoingAP, DomFunctions.getInputContents(DomFunctions.chat_box_id));
         DomFunctions.clearInput(DomFunctions.chat_box_id)
       }
 
@@ -316,13 +316,13 @@ fun mainPage() {
 
 
     # Spawn process which sends messages to the server
-    OutgoingMessageHandler.init(clientSend, moderatorChan);
+    var outgoingAP = OutgoingMessageHandler.init(clientSend, moderatorChan);
 
     # Spawn process which handles incoming messages from the server
     IncomingMessageHandler.init(clientReceive);
 
     # Finally, remove the name request box, put the chatbox in, and start off
-    domReplaceChildren(chatBox(), getNodeById("main"));
+    domReplaceChildren(chatBox(outgoingAP), getNodeById("main"));
     # TODO: Add moderator handler box back in
     #if (is_mod) domReplaceChildren(makeAdminBox(modHandler),
     #                            getNodeById("adminBox_placehodler"))
