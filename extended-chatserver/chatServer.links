@@ -48,7 +48,7 @@ module Moderator {
   fun create(roomAp) {
     fun loop(s) {
       offer(s) {
-        case RemoveUser(s) ->
+        case KickUser(s) ->
           var (nick, s) = receive(s);
           # TODO: send message to AP here
           loop(s)

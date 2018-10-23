@@ -9,7 +9,7 @@ typename ConnectError = [| NameInUse | BadRoom |];
 
 
 typename ModeratorSend  =
-  [+| RemoveUser : !(Nickname) . ModeratorSend,
+  [+| KickUser : !(Nickname) . ModeratorSend,
       MuteUser : !(Nickname) . ModeratorSend,
       MakeModerator : !(Nickname) . ModeratorSend |+];
 

@@ -80,12 +80,25 @@ module OutgoingMessageHandler {
     [&| ChatMessage: ?Message.End,
         MuteUser: ?Nickname.End,
         KickUser: ?Nickname.End,
+        MakeModerator: ?Nickname.End,
         BecomeModerator: ?ModeratorSend.End |&];
+
+  # It's possible for this process to receive mod commands without
+  # it actually holding the mod channel. Without the mod channel, it
+  # can't relay the message to the server, so it's a no-op.
+  # (yes, this is fmap)
+  fun withModChannel(f, chan) {
+    switch(chan) {
+      case Just(chan) -> Just(f(chan))
+      case Nothing -> Nothing
+    }
+  }
 
   fun init(clientSend, modSend) {
     var (outgoingAP: AP(OutgoingMessage)) = new();
 
     fun loop(clientSend, modSend) {
+
      fun isTopicCmd(str) {
         (charAt(str, 0) == '/') &&
         (strlen(str) > 8) &&
@@ -111,11 +124,27 @@ module OutgoingMessageHandler {
           }
         case MuteUser(s) ->
           var (victim, _) = receive(s);
-          # TODO: Send moderator message here
+          var modSend =
+            withModChannel(fun(modSend) {
+              var modSend = select MuteUser modSend;
+              send(victim, modSend)
+            }, modSend);
           loop(clientSend, modSend)
         case KickUser(s) ->
           var (victim, _) = receive(s);
-          # TODO: Send moderator message here
+          var modSend =
+            withModChannel(fun(modSend) {
+              var modSend = select KickUser modSend;
+              send(victim, modSend)
+            }, modSend);
+          loop(clientSend, modSend)
+        case MakeModerator(s) ->
+          var (promotee, _) = receive(s);
+          var modSend =
+            withModChannel(fun(modSend) {
+              var modSend = select MakeModerator modSend;
+              send(promotee, modSend)
+            }, modSend);
           loop(clientSend, modSend)
         case BecomeModerator(s) ->
           var (newModChan, _) = receive(s);
@@ -164,6 +193,14 @@ module OutgoingMessageHandler {
     })
   }
 
+  fun makeModerator(outgoingAP, nick) {
+    asynchronously(fun() {
+      var s = request(outgoingAP);
+      var s = select MakeModerator s;
+      ignore(send(nick, s))
+    })
+  }
+
   fun becomeModerator(outgoingAP, modChan) {
     ignore(spawnClient {
       var s = request(outgoingAP);
@@ -178,7 +215,7 @@ module OutgoingMessageHandler {
 # DOM as a result.
 module IncomingMessageHandler {
 
-  fun init(clientReceive) {
+  fun init(outgoingAP, clientReceive) {
     fun loop(clientReceive) {
       offer(clientReceive) {
         case IncomingChatMessage(s) ->
@@ -301,7 +338,7 @@ fun mainPage() {
 
       <#>
         <div id="chatBox">
-          <div id="adminBox_placehodler"></div>
+          <div id="adminBox_placeholder"></div>
           <div id="topic"><p><span class="lead"><b>Room: </b>{stringToXml(room)}</span></p></div>
           <div id="topic"><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></div>
           <div id="msgs" style="overflow-y:scroll; width:100%; height:400px;"></div>
@@ -315,11 +352,13 @@ fun mainPage() {
     }
 
 
+    # TODO: Inspect moderatorChan to see whether we're a moderator or not
+
     # Spawn process which sends messages to the server
     var outgoingAP = OutgoingMessageHandler.init(clientSend, moderatorChan);
 
     # Spawn process which handles incoming messages from the server
-    IncomingMessageHandler.init(clientReceive);
+    IncomingMessageHandler.init(outgoingAP, clientReceive);
 
     # Finally, remove the name request box, put the chatbox in, and start off
     domReplaceChildren(chatBox(outgoingAP), getNodeById("main"));
@@ -329,23 +368,39 @@ fun mainPage() {
     #else ()
   }
 
-  # fun makeAdminBox(modHandler) {
-  #   <#>
-  #     <form id="adminForm" l:onsubmit="{()}">
-  #       <p>
-  #         <select id="clientSelect" required="required">
-  #           <option value="">None selected</option>
-  #         </select><br/>
-  #         <input type="submit" id="adminRemove" value="Remove"
-  #         l:onclick="{modHandler ! Remove() }"/>
-  #         <input type="submit" id="adminMute" value="Mute/Unmute"
-  #         l:onclick="{modHandler ! Mute() }"/>
-  #         <input type="submit" id="adminMakeAdmin" value="Make moderator"
-  #         l:onclick="{modHandler ! MakeModerator() }"/>
-  #       </p>
-  #     </form>
-  #   </#>
-  # }
+  fun makeAdminBox(outgoingAP) {
+    fun getSelectedUser() {
+      DomFunctions.getInputContents("clientSelect")
+    }
+
+    fun kickUser() {
+      OutgoingMessageHandler.kickUser(outgoingAP, getSelectedUser())
+    }
+
+    fun muteUser() {
+      OutgoingMessageHandler.muteUser(outgoingAP, getSelectedUser())
+    }
+
+    fun makeModerator() {
+      OutgoingMessageHandler.makeModerator(outgoingAP, getSelectedUser())
+    }
+
+    <#>
+      <form id="adminForm" l:onsubmit="{()}">
+        <p>
+          <select id="clientSelect" required="required">
+            <option value="">None selected</option>
+          </select><br/>
+          <input type="submit" id="adminRemove" value="Kick"
+          l:onclick="{ kickUser() }"/>
+          <input type="submit" id="adminMute" value="Mute/Unmute"
+          l:onclick="{ muteUser() }"/>
+          <input type="submit" id="adminMakeAdmin" value="Make moderator"
+          l:onclick="{ makeModerator() }"/>
+        </p>
+      </form>
+    </#>
+  }
 
   fun chooseRoom(ap) {
     var roomFormAP = new();
