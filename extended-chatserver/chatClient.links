@@ -14,14 +14,61 @@ module DomFunctions {
     domGetPropertyFromRef(textNode, "value")
   }
 
+  fun getChatboxContents() {
+    getInputContents(chat_box_id)
+  }
+
+  fun getNicknameContents() {
+    getInputContents(nickname_box_id)
+  }
+
+
   fun clearInput(dom_id) {
     var textNode = getNodeById(dom_id);
     var _ = domSetPropertyFromRef(textNode, "value", "");
     ()
   }
-}
 
-open DomFunctions
+  fun addToMsgBox(xml) {
+    var msgsNode = getNodeById("msgs");
+    appendChildren(xml, msgsNode);
+    var scrollHeight = domGetPropertyFromRef(msgsNode, "scrollHeight");
+    var _ = domSetPropertyFromRef(msgsNode, "scrollTop", scrollHeight);
+    ()
+  }
+
+  fun addChatMsg(nick, msg) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b>: {stringToXml(msg)}</p></#>;
+    addToMsgBox(to_add)
+  }
+
+  fun addNewUser(nick) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> just joined</p></#>;
+    addToMsgBox(to_add)
+  }
+
+  fun changeTopic(topic) {
+    var topicNode = getNodeById("topic");
+    var to_add = <#><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></#>;
+    domReplaceChildren(to_add, topicNode)
+  }
+
+  fun removeUser(nick) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> just left</p></#>;
+    addToMsgBox(to_add)
+  }
+
+  fun muteUser(nick) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> got muted :(</p></#>;
+    addToMsgBox(to_add)
+  }
+
+  fun unmuteUser(nick) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> got unmuted :D </p></#>;
+    addToMsgBox(to_add)
+  }
+
+}
 
 
 # Receives messages from DOM (both standard and moderator).
@@ -31,14 +78,14 @@ module OutgoingMessageHandler {
 
   typename OutgoingMessage =
     [&| ChatMessage: ?Message.End,
-      | MuteUser: ?Nickname.End,
-      | KickUser: ?Nickname.End,
-      | BecomeModerator: ?ModeratorSend.End |&];
+        MuteUser: ?Nickname.End,
+        KickUser: ?Nickname.End,
+        BecomeModerator: ?ModeratorSend.End |&];
 
   sig outgoingAP : AP(OutgoingMessage)
   var outgoingAP = new();
 
-  fun start(nickname, clientSend, modSend) {
+  fun init(clientSend, modSend) {
     fun loop(clientSend, modSend) {
      fun isTopicCmd(str) {
         (charAt(str, 0) == '/') &&
@@ -65,25 +112,112 @@ module OutgoingMessageHandler {
           }
         case MuteUser(s) ->
           var (victim, _) = receive(s);
-# TODO: Send moderator message here
+          # TODO: Send moderator message here
           loop(clientSend, modSend)
-        case KickUser(s) -> TODO
-# TODO: Send moderator message here
-        case BecomeModerator(s) -> TODO
+        case KickUser(s) ->
+          var (victim, _) = receive(s);
+          # TODO: Send moderator message here
+          loop(clientSend, modSend)
+        case BecomeModerator(s) ->
+          var (newModChan, _) = receive(s);
+          # It may be the case that we have an existing moderator
+          # channel. If so, cancel it, and replace it.
+          var modSend =
+            switch(modSend) {
+              case Just(modSend) ->
+                cancel(modSend);
+                Just(newModChan)
+              case Nothing -> Just(newModChan)
+            };
+          # TODO: Setup UI for moderator stuff
+          loop(clientSend, modSend)
       }
     }
-    spawn { loop(clientSend, modSend) }
+    ignore(spawnClient { loop(clientSend, modSend) })
+  }
+
+  fun asynchronously(f) {
+    ignore(spawnClient { f() })
   }
 
   fun chatMessage(msg) {
+    asynchronously(fun() {
+      var s = request(outgoingAP);
+      var s = select ChatMessage s;
+      ignore(send(msg, s))
+    })
   }
 
+  fun muteUser(nick) {
+    asynchronously(fun() {
+      var s = request(outgoingAP);
+      var s = select MuteUser s;
+      ignore(send(nick, s))
+    })
+  }
+
+  fun kickUser(nick) {
+    asynchronously(fun() {
+      var s = request(outgoingAP);
+      var s = select KickUser s;
+      ignore(send(nick, s))
+    })
+  }
+
+  fun becomeModerator(modChan) {
+    ignore(spawnClient {
+      var s = request(outgoingAP);
+      var s = select BecomeModerator s;
+      ignore(send(modChan, s))
+    })
+  }
 
 }
 
 # Receives messages from the chat server, and modifies the
 # DOM as a result.
 module IncomingMessageHandler {
+
+  fun init(clientReceive) {
+    fun loop(clientReceive) {
+      offer(clientReceive) {
+        case IncomingChatMessage(s) ->
+          var ((nick, chatmsg), s) = receive(s);
+          debug("Received incoming chat message (" ^^ chatmsg ^^ ") from (" ^^ nick ^^ ")");
+          DomFunctions.addChatMsg(nick, chatmsg);
+          loop(s)
+        case NewUser(s) ->
+          var (nick, s) = receive(s);
+          DomFunctions.addNewUser(nick);
+          loop(s)
+        case NewTopic(s) ->
+          var (topic, s) = receive(s);
+          DomFunctions.changeTopic(topic);
+          loop(s)
+        case UserLeft(s) ->
+          var (nick, s) = receive(s);
+          DomFunctions.removeUser(nick); # Poor Nick
+          loop(s)
+        case UserMuted(s) ->
+          var (nick, s) = receive(s);
+          DomFunctions.muteUser(nick);
+          loop(s)
+        case UserUnmuted(s) ->
+          var (nick, s) = receive(s);
+          DomFunctions.unmuteUser(nick);
+          loop(s)
+        case BecomeModerator(s) ->
+          var (chan, s) = receive(s);
+          cancel(chan); # FIXME: FOR NOW ONLY!
+          loop(s)
+        case Kick(_) ->
+          # FIXME: We want to eliminate the use of redirect.
+          redirect("/");
+          ()
+      }
+    }
+    ignore(spawnClient { loop(clientReceive) })
+  }
 
 }
 
@@ -159,91 +293,10 @@ fun mainPage() {
 
   fun displayChat(room, topic, clientSend, clientReceive, moderatorChan) {
 
-    var outgoingAP = new();
-
-    fun addToMsgBox(xml) {
-      var msgsNode = getNodeById("msgs");
-      appendChildren(xml, msgsNode);
-      var scrollHeight = domGetPropertyFromRef(msgsNode, "scrollHeight");
-      var _ = domSetPropertyFromRef(msgsNode, "scrollTop", scrollHeight);
-      ()
-    }
-
-    fun addChatMsg(nick, msg) {
-      var to_add = <#><p><b>{stringToXml(nick)}</b>: {stringToXml(msg)}</p></#>;
-      addToMsgBox(to_add)
-    }
-
-    fun addNewUser(nick) {
-      var to_add = <#><p><b>{stringToXml(nick)}</b> just joined</p></#>;
-      addToMsgBox(to_add)
-    }
-
-    fun changeTopic(topic) {
-      var topicNode = getNodeById("topic");
-      var to_add = <#><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></#>;
-      domReplaceChildren(to_add, topicNode)
-    }
-
-    fun removeUser(nick) {
-      var to_add = <#><p><b>{stringToXml(nick)}</b> just left</p></#>;
-      addToMsgBox(to_add)
-    }
-
-    fun muteUser(nick) {
-      var to_add = <#><p><b>{stringToXml(nick)}</b> got muted :(</p></#>;
-      addToMsgBox(to_add)
-    }
-
-    fun unmuteUser(nick) {
-      var to_add = <#><p><b>{stringToXml(nick)}</b> got unmuted :D </p></#>;
-      addToMsgBox(to_add)
-    }
-
-    fun incomingMsgLoop(s) {
-      offer(s) {
-        case IncomingChatMessage(s) ->
-          var ((nick, chatmsg), s) = receive(s);
-          debug("Received incoming chat message (" ^^ chatmsg ^^ ") from (" ^^ nick ^^ ")");
-          addChatMsg(nick, chatmsg);
-          incomingMsgLoop(s)
-        case NewUser(s) ->
-          var (nick, s) = receive(s);
-          # moderatorPid ! NewUser(nick);
-          addNewUser(nick);
-          incomingMsgLoop(s)
-        case NewTopic(s) ->
-          var (topic, s) = receive(s);
-          changeTopic(topic);
-          incomingMsgLoop(s)
-        case UserLeft(s) ->
-          var (nick, s) = receive(s);
-          # moderatorPid ! UserLeft(nick);
-          removeUser(nick); # Poor Nick
-          incomingMsgLoop(s)
-        case UserMuted(s) ->
-          var (nick, s) = receive(s);
-          muteUser(nick);
-          incomingMsgLoop(s)
-        case UserUnmuted(s) ->
-          var (nick, s) = receive(s);
-          unmuteUser(nick);
-          incomingMsgLoop(s)
-        case BecomeModerator(s) ->
-          var (chan, s) = receive(s);
-          cancel(chan); # FIXME: FOR NOW ONLY!
-          incomingMsgLoop(s)
-        case Kick(_) ->
-          # FIXME: We want to eliminate the use of redirect.
-          redirect("/");
-          ()
-      }
-    }
-
     fun chatBox() {
       fun submit() {
-        var _ = send(getInputContents(chat_box_id), request(outgoingAP));
-        clearInput(chat_box_id)
+        OutgoingMessageHandler.chatMessage(DomFunctions.getInputContents(DomFunctions.chat_box_id));
+        DomFunctions.clearInput(DomFunctions.chat_box_id)
       }
 
       <#>
@@ -254,7 +307,7 @@ fun mainPage() {
           <div id="msgs" style="overflow-y:scroll; width:100%; height:400px;"></div>
           <div>
             <form l:onsubmit="{submit()}">
-              <input id="{chat_box_id}" type="text" style="width:100%"></input>
+              <input id="{DomFunctions.chat_box_id}" type="text" style="width:100%"></input>
             </form>
           </div>
         </div>
@@ -263,10 +316,10 @@ fun mainPage() {
 
 
     # Spawn process which sends messages to the server
-    ignore(spawnClient { outgoingMsgLoop(clientSend, moderatorChan)});
+    OutgoingMessageHandler.init(clientSend, moderatorChan);
 
     # Spawn process which handles incoming messages from the server
-    ignore(spawnClient { incomingMsgLoop(clientReceive) });
+    IncomingMessageHandler.init(clientReceive);
 
     # Finally, remove the name request box, put the chatbox in, and start off
     domReplaceChildren(chatBox(), getNodeById("main"));
@@ -311,7 +364,7 @@ fun mainPage() {
     fun roomSelectLoop(s, roomCount) {
       fun getRoomName(n) {
         if (n == roomCount) {
-          getInputContents("newRoomName")
+          DomFunctions.getInputContents("newRoomName")
         } else {
           var domRef = getNodeById("room" ^^ intToString(n));
           # Stringly-typed, gotta love it
@@ -325,7 +378,7 @@ fun mainPage() {
 
       # Wait for the form to be submitted
       ignore(accept(roomFormAP));
-      var nickname = getInputContents("nickname");
+      var nickname = DomFunctions.getInputContents("nickname");
       var roomName = getRoomName(0);
       if (roomName == "" || nickname == "") {
         print("Please enter a valid room name and nickname");

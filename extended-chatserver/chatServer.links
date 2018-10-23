@@ -75,7 +75,6 @@ module Room {
      nicknames:[Nickname],
      moderators:[Nickname],
      ap:RoomHandle);
-     # clients:LinList(RoomSend));
 
   # Gets us a pair of (RoomSend, ~RoomSend) endpoints.
   # Perhaps this should be in the standard library.
@@ -309,41 +308,6 @@ module RoomManager {
   }
 }
 
-# Messages directed form the server to the client
-# fun clientSendHandler(s) {
-#   receive {
-#     case DeliverMessage(nick, msg) ->
-#       var s = select IncomingChatMessage s;
-#       var s = send((nick, msg), s);
-#       clientSendHandler(s)
-#     case DeliverNewUser(nick) ->
-#       var s = select NewUser s;
-#       var s = send(nick, s);
-#       clientSendHandler(s)
-#     case DeliverNewTopic(topic) ->
-#       var s = select NewTopic s;
-#       var s = send(topic, s);
-#       clientSendHandler(s)
-#     case DeliverUserLeft(nick) ->
-#       var s = select UserLeft s;
-#       var s = send(nick, s);
-#       clientSendHandler(s)
-#     case DeliverUserMuted(nick) ->
-#       var s = select UserMuted s;
-#       var s = send(nick, s);
-#       clientSendHandler(s)
-#     case DeliverUserUnmuted(nick) ->
-#       var s = select UserUnmuted s;
-#       var s = send(nick, s);
-#       clientSendHandler(s)
-#     case DeliverLeave() ->
-#       select Leave s
-#     case DeliverBecameModerator(nicks) ->
-#       var s = select MakeModerator s;
-#       var s = send(nicks, s);
-#       clientSendHandler(s)
-#   }
-# }
 
 # status : ( name:Room, topic:Topic, users:[User] )
 # user : ( nick:Nickname, pid:ClientSendHandler, isAdmin:Bool,
@@ -454,6 +418,7 @@ fun acceptAndWork(s) server {
       offer(s) {
         case ChatMessage(s) ->
           var (msg, s) = receive(s);
+          debug("worker loop for " ^^ nick ^^ ": sending message " ^^ msg);
           Room.chatMessage(roomHandle, nick, msg);
           SameRoom(s)
         case ChangeTopic(s) ->
