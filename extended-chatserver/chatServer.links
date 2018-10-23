@@ -108,7 +108,12 @@ module Room {
     var s = accept(state.ap);
 
     fun kickUser(nick, clients) {
-      clients
+      switch(AssocLinList.find(nick, clients)) {
+        case (Just(nick, s), clients) ->
+          var _ = select Kick s;
+          clients
+        case (Nothing, clients) -> clients
+      }
     }
 
     fun muteUser(nick, clients) {

@@ -69,8 +69,8 @@ module AssocLinList {
   # Finds an entry in a linear association list.
   # Either returns (Nothing, Original List), or
   # (Just(k, v), Original list without (k, v))
-  sig find : (String, LinList((String, a))) ~>
-    (Maybe((String, a)), LinList((String, a)))
+  #sig find : (String, LinList((String, a))) ~>
+  #  (Maybe((String, a)), LinList((String, a)))
   fun find(k, xs) {
     switch(xs) {
       case LinNil -> (Nothing, LinNil)
