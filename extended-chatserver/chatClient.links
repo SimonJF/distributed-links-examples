@@ -23,6 +23,71 @@ module DomFunctions {
 
 open DomFunctions
 
+
+# Receives messages from DOM (both standard and moderator).
+# Contains outgoing message channels for standard messages
+# and also moderator messages.
+module OutgoingMessageHandler {
+
+  typename OutgoingMessage =
+    [&| ChatMessage: ?Message.End,
+      | MuteUser: ?Nickname.End,
+      | KickUser: ?Nickname.End,
+      | BecomeModerator: ?ModeratorSend.End |&];
+
+  sig outgoingAP : AP(OutgoingMessage)
+  var outgoingAP = new();
+
+  fun start(nickname, clientSend, modSend) {
+    fun loop(clientSend, modSend) {
+     fun isTopicCmd(str) {
+        (charAt(str, 0) == '/') &&
+        (strlen(str) > 8) &&
+        (strsub(str, 0, 7) == "/topic ")
+      }
+
+      fun getTopic(str) {
+        strsub(str, 7, strlen(str) - 7)
+      }
+
+      var s = accept(outgoingAP);
+      offer(s) {
+        case ChatMessage(s) ->
+          var (str, _) = receive(s);
+          if (isTopicCmd(str)) {
+            var clientSend = select ChangeTopic clientSend;
+            var clientSend = send(getTopic(str), clientSend);
+            loop(clientSend, modSend)
+          } else {
+            var clientSend = select ChatMessage clientSend;
+            var clientSend = send(str, clientSend);
+            loop(clientSend, modSend)
+          }
+        case MuteUser(s) ->
+          var (victim, _) = receive(s);
+# TODO: Send moderator message here
+          loop(clientSend, modSend)
+        case KickUser(s) -> TODO
+# TODO: Send moderator message here
+        case BecomeModerator(s) -> TODO
+      }
+    }
+    spawn { loop(clientSend, modSend) }
+  }
+
+  fun chatMessage(msg) {
+  }
+
+
+}
+
+# Receives messages from the chat server, and modifies the
+# DOM as a result.
+module IncomingMessageHandler {
+
+}
+
+
 fun mainPage() {
   # loop that receives input from
   # 1. the client (moderator) about removing and muting clients
@@ -174,34 +239,6 @@ fun mainPage() {
           ()
       }
     }
-
-    sig outgoingMsgLoop : (ClientSend, Maybe(ModeratorSend)) ~> ()
-    fun outgoingMsgLoop(clientSend, moderatorChan) {
-      fun isTopicCmd(str) {
-        (charAt(str, 0) == '/') &&
-        (strlen(str) > 8) &&
-        (strsub(str, 0, 7) == "/topic ")
-      }
-
-      fun getTopic(str) {
-        strsub(str, 7, strlen(str) - 7)
-      }
-
-      # Synchronise on outgoingAP
-      var (str, _) = receive(accept(outgoingAP));
-
-      if (isTopicCmd(str)) {
-        var clientSend = select ChangeTopic clientSend;
-        var clientSend = send(getTopic(str), clientSend);
-        outgoingMsgLoop(clientSend, moderatorChan)
-      } else {
-        var clientSend = select ChatMessage clientSend;
-        var clientSend = send(str, clientSend);
-        outgoingMsgLoop(clientSend, moderatorChan)
-      }
-      # TODO: Leaving chat room
-    }
-
 
     fun chatBox() {
       fun submit() {
