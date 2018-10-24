@@ -36,8 +36,8 @@ typename ClientSend =
 
 typename ClientConnect =
   ?([RoomName]).!(RoomName, Nickname).
-    [&| JoinedOK: ?(Topic, ClientReceive) . ClientSend,
-        JoinedOKAsModerator: ?(Topic, ClientReceive, ModeratorSend). ClientSend,
+    [&| JoinedOK: ?(Topic, [Nickname], ClientReceive) . ClientSend,
+        JoinedOKAsModerator: ?(Topic, [Nickname], ClientReceive, ModeratorSend). ClientSend,
         Nope: ?ConnectError.End
     |&];
 

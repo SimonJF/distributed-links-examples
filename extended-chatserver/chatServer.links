@@ -13,9 +13,9 @@ fun member(elem , l) {
 typename RoomJoinResponse =
   [| UsernameTaken
      | InvalidRoom
-     | Joined: (Topic, ClientReceive)
+     | Joined: (Topic, [Nickname], ClientReceive)
      | JoinedAsModerator:
-        (Topic, ClientReceive, ModeratorSend) |];
+        (Topic, [Nickname], ClientReceive, ModeratorSend) |];
 # Messages sent from workers and the room manager to
 # a room. Note that is *not* exposed to clients directly.
 # It is, however, the union of both the messages sent by
@@ -43,8 +43,8 @@ typename RoomHandle = AP(RoomReceive);
 typename RoomJoinResult =
   [| UsernameTaken
    | InvalidRoom
-   | Joined: (Topic, ClientReceive, RoomHandle)
-   | JoinedAsModerator: (Topic, ClientReceive, ModeratorSend, RoomHandle) |];
+   | Joined: (Topic, [Nickname], ClientReceive, RoomHandle)
+   | JoinedAsModerator: (Topic, [Nickname], ClientReceive, ModeratorSend, RoomHandle) |];
 
 
 module Moderator {
@@ -121,7 +121,17 @@ module Room {
     }
 
     fun muteUser(nick, clients) {
-      clients
+      switch(AssocLinList.find(nick, clients)) {
+        case (Just((s, info)), clients) ->
+          var info = (info with isMuted=(not (info.isMuted)));
+          # Broadcast to clients
+          AssocLinList.map(fun((s, info)) {
+            var s = select UserMuted s;
+            var s = send(nick, s);
+            (s, info)
+          }, LinCons((nick, (s, info)), clients))
+        case (Nothing, clients) -> clients
+      }
     }
 
     fun makeModerator(nick, clients) {
@@ -148,16 +158,19 @@ module Room {
           if (isEmpty) {
             var (roomSend, clientReceive) = createRoomSend();
             var moderatorSend = Moderator.create(state.ap);
-            var _ =
-              send(JoinedAsModerator(state.topic,
-                clientReceive, moderatorSend), s);
             var clients = LinCons((nick, newClient(nick, roomSend, true)), clients);
+            var (nicks, clients) = AssocLinList.keys(clients);
+            var _ =
+              send(JoinedAsModerator(state.topic, nicks,
+                clientReceive, moderatorSend), s);
+
             loop(state, clients)
           } else {
             var (roomSend, clientReceive) = createRoomSend();
-            var clients = broadcastJoined(nick, clients);
-            var _ = send(Joined(state.topic, clientReceive), s);
             var clients = LinCons((nick, newClient(nick, roomSend, false)), clients);
+            var clients = broadcastJoined(nick, clients);
+            var (nicks, clients) = AssocLinList.keys(clients);
+            var _ = send(Joined(state.topic, nicks, clientReceive), s);
             loop(state, clients)
           }
         }
@@ -212,11 +225,6 @@ module Room {
         loop(state, clients)
       case MuteUser(s) ->
         var (name, _) = receive(s);
-        var clients = AssocLinList.map(fun((s, info)) {
-          var s = select UserMuted s;
-          var s = send(name, s);
-          (s, info)
-        }, clients);
         var clients = muteUser(name, clients);
         loop(state, clients)
       case MakeModerator(s) ->
@@ -324,9 +332,9 @@ module RoomManager {
       switch(Room.join(roomAp, nick)) {
         case UsernameTaken -> UsernameTaken
         case InvalidRoom -> InvalidRoom
-        case Joined(topic, cr) -> Joined(topic, cr, roomAp)
-        case JoinedAsModerator(topic, cr, ms) ->
-          JoinedAsModerator(topic, cr, ms, roomAp)
+        case Joined(topic, nicks, cr) -> Joined(topic, nicks, cr, roomAp)
+        case JoinedAsModerator(topic, nicks, cr, ms) ->
+          JoinedAsModerator(topic, nicks, cr, ms, roomAp)
       }
     }
 
@@ -378,98 +386,6 @@ module RoomManager {
     res
   }
 }
-
-
-# status : ( name:Room, topic:Topic, users:[User] )
-# user : ( nick:Nickname, pid:ClientSendHandler, isAdmin:Bool,
-#          isMuted:Bool )
-# Main server loop that handles an individual room
-# fun perRoomLoop(status) server {
-#   fun removeUserByName(nick, users) {
-#     switch(users) {
-#       case [] -> []
-#       case x::xs -> if (x.nick == nick) tl(users)
-#                     else hd(users)::removeUserByName(nick, xs)
-#     }
-#   }
-#
-#   fun muteUserByName(nick, users) {
-#     switch(users) {
-#       case [] -> []
-#       case x::xs ->
-#         if (x.nick == nick)
-#           (x with isMuted=not(x.isMuted)) :: xs
-#         else x::muteUserByName(nick, xs)
-#     }
-#   }
-#
-#   fun makeModeratorByName(nick, users) {
-#     switch(users) {
-#       case [] -> []
-#       case x::xs ->
-#         if (x.nick == nick) (x with isAdmin=true) :: xs
-#         else x::makeModeratorByName(nick, xs)
-#     }
-#   }
-#
-#   fun isMuted(nick, users) {
-#     switch(users) {
-#       case [] -> true
-#       case x::xs -> if (x.nick == nick) x.isMuted
-#                     else isMuted(nick, xs)
-#     }
-#   }
-#
-#   receive {
-#     case BroadcastMessage(nick, msg) ->
-#       var users = if (isMuted(nick, status.users)) []
-#                   else status.users;
-#       broadcastMessage(DeliverMessage(nick, msg), users);
-#       perRoomLoop(status)
-#     case BroadcastChangeTopic(newTopic) ->
-#       broadcastMessage(DeliverNewTopic(newTopic), status.users);
-#       perRoomLoop((status with topic=newTopic))
-#     case NewClient(nick, pid) ->
-#       broadcastMessage(DeliverNewUser(nick), status.users);
-#       var new_user =
-#         (nick=nick, pid=pid, isAdmin=false, isMuted=false);
-#       var new_users = new_user::(status.users);
-#       perRoomLoop((status with users=new_users))
-#     case GetRoomState(pid) ->
-#       pid ! (status.name, status.topic, status.users);
-#       perRoomLoop(status)
-#     case RemoveUser(nick) ->
-#       var matchingUsers = filter(fun (x) { x.nick==nick }, status.users);
-#       if (matchingUsers == [])
-#         perRoomLoop(status)
-#       else {
-#         var users = filter(fun (x) { x.nick<>nick }, status.users);
-#         broadcastMessage(DeliverLeave(), matchingUsers);
-#         broadcastMessage(DeliverUserLeft(nick), users);
-#         perRoomLoop((status with users=users))
-#       }
-#     case MuteUser(nick) ->
-#       var is_muted = filter( fun(x){ x.nick==nick && x.isMuted },
-#                                      status.users) == [];
-#       if (is_muted)
-#         broadcastMessage(DeliverUserMuted(nick), status.users)
-#       else
-#         broadcastMessage(DeliverUserUnmuted(nick), status.users);
-#       var users = muteUserByName(nick, status.users);
-#       perRoomLoop((status with users=users))
-#     case MakeModerator(nick) ->
-#       var nonModeratorNicks =
-#         filter( fun(x) { x.nick==nick && x.isAdmin==false }, status.users );
-#       if (nonModeratorNicks == [])
-#         perRoomLoop(status)
-#       else {
-#         var userNames = for (x<-status.users) { [x.nick] };
-#         broadcastMessage(DeliverBecameModerator(userNames), nonModeratorNicks);
-#         var users = makeModeratorByName(nick, status.users);
-#         perRoomLoop((status with users=users))
-#       }
-#   }
-# }
 
 # Send all existing rooms to the client
 # The client then either picks one of the existing rooms or creates a new one,
@@ -524,13 +440,13 @@ fun acceptAndWork(s) server {
     case InvalidRoom ->
       var s = select Nope s;
       ignore(send(BadRoom, s))
-    case Joined(topic, clientReceive, roomAP) ->
+    case Joined(topic, nicks, clientReceive, roomAP) ->
       var s = select JoinedOK s;
-      var s = send((topic, clientReceive), s);
+      var s = send((topic, nicks, clientReceive), s);
       workerLoop(nick, roomAP, s)
-    case JoinedAsModerator(topic, clientReceive, moderatorSend, roomAP) ->
+    case JoinedAsModerator(topic, nicks, clientReceive, moderatorSend, roomAP) ->
       var s = select JoinedOKAsModerator s;
-      var s = send((topic, clientReceive, moderatorSend), s);
+      var s = send((topic, nicks, clientReceive, moderatorSend), s);
       workerLoop(nick, roomAP, s)
   }
 }

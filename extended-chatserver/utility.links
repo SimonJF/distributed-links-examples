@@ -55,6 +55,15 @@ module AssocLinList {
     }
   }
 
+  fun keys(xs) {
+    switch(xs) {
+      case LinNil -> ([], LinNil)
+      case LinCons((k, v), xs) ->
+        var (keys, xs) = keys(xs);
+        (k :: keys, LinCons((k, v), xs))
+    }
+  }
+
 # Maps a function over all channels
  # sig map : ((a) ~e~> b, LinList((String, a))) ~e~>
  #   LinList((String, b))

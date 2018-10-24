@@ -328,7 +328,7 @@ fun mainPage() {
 #  }
 
 
-  fun displayChat(room, topic, clientSend, clientReceive, moderatorChan) {
+  fun displayChat(room, topic, nicknames, clientSend, clientReceive, moderatorChan) {
 
     fun chatBox(outgoingAP) {
       fun submit() {
@@ -338,7 +338,7 @@ fun mainPage() {
 
       <#>
         <div id="chatBox">
-          <div id="adminBox_placeholder"></div>
+          <div id="admin_placeholder"></div>
           <div id="topic"><p><span class="lead"><b>Room: </b>{stringToXml(room)}</span></p></div>
           <div id="topic"><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></div>
           <div id="msgs" style="overflow-y:scroll; width:100%; height:400px;"></div>
@@ -352,7 +352,55 @@ fun mainPage() {
     }
 
 
+    fun addAdminForm(outgoingAP) {
+      fun getSelectedUser() {
+        DomFunctions.getInputContents("clientSelect")
+      }
+
+      fun kickUser() {
+        if (getSelectedUser() <> "") {
+          OutgoingMessageHandler.kickUser(outgoingAP, getSelectedUser())
+        } else { () }
+      }
+
+      fun muteUser() {
+        if (getSelectedUser() <> "") {
+          OutgoingMessageHandler.muteUser(outgoingAP, getSelectedUser())
+        } else { () }
+      }
+
+      fun makeModerator() {
+        if (getSelectedUser() <> "") {
+          OutgoingMessageHandler.makeModerator(outgoingAP, getSelectedUser())
+        } else { () }
+      }
+
+      var adminForm =
+        <#>
+          <form id="adminForm" l:onsubmit="{()}">
+            <p>
+              <select id="clientSelect" required="required">
+                <option value="">None selected</option>
+              </select><br/>
+              <input type="submit" id="adminRemove" value="Kick"
+              l:onclick="{ kickUser() }"/>
+              <input type="submit" id="adminMute" value="Mute/Unmute"
+              l:onclick="{ muteUser() }"/>
+              <input type="submit" id="adminMakeAdmin" value="Make moderator"
+              l:onclick="{ makeModerator() }"/>
+            </p>
+          </form>
+        </#>;
+      domReplaceChildren(adminForm, getNodeById("admin_placeholder"))
+    }
+
+
     # TODO: Inspect moderatorChan to see whether we're a moderator or not
+    var (isMod, moderatorChan) =
+      switch(moderatorChan) {
+        case Just(c) -> (true, Just(c))
+        case Nothing -> (false, Nothing)
+      };
 
     # Spawn process which sends messages to the server
     var outgoingAP = OutgoingMessageHandler.init(clientSend, moderatorChan);
@@ -360,46 +408,15 @@ fun mainPage() {
     # Spawn process which handles incoming messages from the server
     IncomingMessageHandler.init(outgoingAP, clientReceive);
 
-    # Finally, remove the name request box, put the chatbox in, and start off
+    # Finally, remove the name request box, put the chatbox in, put mod form in
+    # if required, and start off
     domReplaceChildren(chatBox(outgoingAP), getNodeById("main"));
-    # TODO: Add moderator handler box back in
-    #if (is_mod) domReplaceChildren(makeAdminBox(modHandler),
-    #                            getNodeById("adminBox_placehodler"))
-    #else ()
-  }
 
-  fun makeAdminBox(outgoingAP) {
-    fun getSelectedUser() {
-      DomFunctions.getInputContents("clientSelect")
+    if (isMod) {
+      addAdminForm(outgoingAP)
+    } else {
+      ()
     }
-
-    fun kickUser() {
-      OutgoingMessageHandler.kickUser(outgoingAP, getSelectedUser())
-    }
-
-    fun muteUser() {
-      OutgoingMessageHandler.muteUser(outgoingAP, getSelectedUser())
-    }
-
-    fun makeModerator() {
-      OutgoingMessageHandler.makeModerator(outgoingAP, getSelectedUser())
-    }
-
-    <#>
-      <form id="adminForm" l:onsubmit="{()}">
-        <p>
-          <select id="clientSelect" required="required">
-            <option value="">None selected</option>
-          </select><br/>
-          <input type="submit" id="adminRemove" value="Kick"
-          l:onclick="{ kickUser() }"/>
-          <input type="submit" id="adminMute" value="Mute/Unmute"
-          l:onclick="{ muteUser() }"/>
-          <input type="submit" id="adminMakeAdmin" value="Make moderator"
-          l:onclick="{ makeModerator() }"/>
-        </p>
-      </form>
-    </#>
   }
 
   fun chooseRoom(ap) {
@@ -442,11 +459,11 @@ fun mainPage() {
         var s = send((roomName, nickname), s);
         offer(s) {
           case JoinedOK(s) ->
-            var ((topic, clientReceive), s) = receive(s);
-            displayChat(roomName, topic, s, clientReceive, Nothing)
+            var ((topic, nicknames, clientReceive), s) = receive(s);
+            displayChat(roomName, topic, nicknames, s, clientReceive, Nothing)
           case JoinedOKAsModerator(s) ->
-            var ((topic, clientReceive, modSend), s) = receive(s);
-            displayChat(roomName, topic, s, clientReceive, Just(modSend))
+            var ((topic, nicknames, clientReceive, modSend), s) = receive(s);
+            displayChat(roomName,  topic, nicknames, s, clientReceive, Just(modSend))
           case Nope(s) ->
             var (err, _) = receive(s);
             print(errToString(err));
