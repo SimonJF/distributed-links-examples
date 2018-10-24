@@ -123,10 +123,16 @@ module Room {
     fun muteUser(nick, clients) {
       switch(AssocLinList.find(nick, clients)) {
         case (Just((s, info)), clients) ->
-          var info = (info with isMuted=(not (info.isMuted)));
+          var newMuted = not (info.isMuted);
+          var info = (info with isMuted=newMuted);
           # Broadcast to clients
           AssocLinList.map(fun((s, info)) {
-            var s = select UserMuted s;
+            var s =
+              if (newMuted) {
+                select UserMuted s
+              } else {
+                select UserUnmuted s
+              };
             var s = send(nick, s);
             (s, info)
           }, LinCons((nick, (s, info)), clients))
@@ -135,7 +141,21 @@ module Room {
     }
 
     fun makeModerator(nick, clients) {
-      clients
+      switch(AssocLinList.find(nick, clients)) {
+        case (Just((s, info)), clients) ->
+          # If the user is a moderator already, nothing doing
+          if (info.isMod) {
+            LinCons((nick, (s, info)), clients)
+          } else {
+            # Otherwise, create a moderator channel + handler, and
+            # relay the channel to the client
+            var modSend = Moderator.create(state.ap);
+            var s = select BecomeModerator s;
+            var s = send(modSend, s);
+            LinCons((nick, (s, info)), clients)
+          }
+        case (Nothing, clients) -> clients
+      }
     }
 
     fun newClient(nick, chan, isMod) {
@@ -157,9 +177,10 @@ module Room {
           var (isEmpty, clients) = AssocLinList.isEmpty(clients);
           if (isEmpty) {
             var (roomSend, clientReceive) = createRoomSend();
+            var (nicks, clients) = AssocLinList.keys(clients);
             var moderatorSend = Moderator.create(state.ap);
             var clients = LinCons((nick, newClient(nick, roomSend, true)), clients);
-            var (nicks, clients) = AssocLinList.keys(clients);
+            var clients = broadcastJoined(nick, clients);
             var _ =
               send(JoinedAsModerator(state.topic, nicks,
                 clientReceive, moderatorSend), s);
@@ -167,9 +188,9 @@ module Room {
             loop(state, clients)
           } else {
             var (roomSend, clientReceive) = createRoomSend();
+            var (nicks, clients) = AssocLinList.keys(clients);
             var clients = LinCons((nick, newClient(nick, roomSend, false)), clients);
             var clients = broadcastJoined(nick, clients);
-            var (nicks, clients) = AssocLinList.keys(clients);
             var _ = send(Joined(state.topic, nicks, clientReceive), s);
             loop(state, clients)
           }
@@ -208,6 +229,13 @@ module Room {
         loop((state with topic=newTopic), clients)
       case Leave(s) ->
         var (name, _) = receive(s);
+        var clients =
+          switch(AssocLinList.find(name, clients)) {
+            case (Just(c, info), clients) ->
+              cancel(c);
+              clients
+            case (Nothing, clients) -> clients
+          };
         var clients = AssocLinList.map(fun((s, info)) {
           var s = select UserLeft s;
           var s = send(name, s);
@@ -216,11 +244,6 @@ module Room {
         loop(state, clients)
       case KickUser(s) ->
         var (name, _) = receive(s);
-        var clients = AssocLinList.map(fun((s, info)) {
-          var s = select UserLeft s;
-          var s = send(name, s);
-          (s, info)
-        }, clients);
         var clients = kickUser(name, clients);
         loop(state, clients)
       case MuteUser(s) ->
@@ -229,7 +252,6 @@ module Room {
         loop(state, clients)
       case MakeModerator(s) ->
         var (name, _) = receive(s);
-# TODO: Check if user is moderator already
         var clients = makeModerator(name, clients);
         loop(state, clients)
       case Kill(s) ->

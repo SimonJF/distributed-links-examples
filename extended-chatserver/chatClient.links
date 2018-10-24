@@ -5,70 +5,6 @@ open ChatSessions
 # DOM handler function, handles messages from both moderator and
 # chat messages when joined to the chat room.
 
-module DomFunctions {
-  var nickname_box_id = "name_box";
-  var chat_box_id = "chat_box";
-
-  fun getInputContents(dom_id) {
-    var textNode = getNodeById(dom_id);
-    domGetPropertyFromRef(textNode, "value")
-  }
-
-  fun getChatboxContents() {
-    getInputContents(chat_box_id)
-  }
-
-  fun getNicknameContents() {
-    getInputContents(nickname_box_id)
-  }
-
-
-  fun clearInput(dom_id) {
-    var textNode = getNodeById(dom_id);
-    var _ = domSetPropertyFromRef(textNode, "value", "");
-    ()
-  }
-
-  fun addToMsgBox(xml) {
-    var msgsNode = getNodeById("msgs");
-    appendChildren(xml, msgsNode);
-    var scrollHeight = domGetPropertyFromRef(msgsNode, "scrollHeight");
-    var _ = domSetPropertyFromRef(msgsNode, "scrollTop", scrollHeight);
-    ()
-  }
-
-  fun addChatMsg(nick, msg) {
-    var to_add = <#><p><b>{stringToXml(nick)}</b>: {stringToXml(msg)}</p></#>;
-    addToMsgBox(to_add)
-  }
-
-  fun addNewUser(nick) {
-    var to_add = <#><p><b>{stringToXml(nick)}</b> just joined</p></#>;
-    addToMsgBox(to_add)
-  }
-
-  fun changeTopic(topic) {
-    var topicNode = getNodeById("topic");
-    var to_add = <#><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></#>;
-    domReplaceChildren(to_add, topicNode)
-  }
-
-  fun removeUser(nick) {
-    var to_add = <#><p><b>{stringToXml(nick)}</b> just left</p></#>;
-    addToMsgBox(to_add)
-  }
-
-  fun muteUser(nick) {
-    var to_add = <#><p><b>{stringToXml(nick)}</b> got muted :(</p></#>;
-    addToMsgBox(to_add)
-  }
-
-  fun unmuteUser(nick) {
-    var to_add = <#><p><b>{stringToXml(nick)}</b> got unmuted :D </p></#>;
-    addToMsgBox(to_add)
-  }
-
-}
 
 
 # Receives messages from DOM (both standard and moderator).
@@ -211,49 +147,188 @@ module OutgoingMessageHandler {
 
 }
 
+module DomFunctions {
+  var nickname_box_id = "name_box";
+  var chat_box_id = "chat_box";
+
+  fun getInputContents(dom_id) {
+    var textNode = getNodeById(dom_id);
+    domGetPropertyFromRef(textNode, "value")
+  }
+
+  fun getChatboxContents() {
+    getInputContents(chat_box_id)
+  }
+
+  fun getNicknameContents() {
+    getInputContents(nickname_box_id)
+  }
+
+
+  fun clearInput(dom_id) {
+    var textNode = getNodeById(dom_id);
+    var _ = domSetPropertyFromRef(textNode, "value", "");
+    ()
+  }
+
+  fun addToMsgBox(xml) {
+    var msgsNode = getNodeById("msgs");
+    appendChildren(xml, msgsNode);
+    var scrollHeight = domGetPropertyFromRef(msgsNode, "scrollHeight");
+    var _ = domSetPropertyFromRef(msgsNode, "scrollTop", scrollHeight);
+    ()
+  }
+
+
+  fun addUserToModBox(name) {
+      var to_add = <#><option id="/id_placeholder">
+                   {stringToXml(name)}</option></#>;
+      appendChildren(to_add, getNodeById("clientSelect"));
+      var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
+                                     "value", name);
+      domSetAttributeFromRef(getNodeById("/id_placeholder"),
+                                     "id", "/moderator"^^name)
+  }
+
+  fun removeUserFromModBox(name) {
+    removeNode(getNodeById("/moderator" ^^ name));
+  }
+
+  fun addChatMsg(nick, msg) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b>: {stringToXml(msg)}</p></#>;
+    addToMsgBox(to_add)
+  }
+
+  fun addNewUser(nick, isMod) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> just joined</p></#>;
+    addToMsgBox(to_add);
+    if(isMod) {
+      addUserToModBox(nick)
+    } else { () }
+  }
+
+  fun changeTopic(topic) {
+    var topicNode = getNodeById("topic");
+    var to_add = <#><p><span class="lead"><b>Topic: </b>{stringToXml(topic)}</span></p></#>;
+    domReplaceChildren(to_add, topicNode)
+  }
+
+  fun removeUser(nick, isMod) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> just left</p></#>;
+    addToMsgBox(to_add);
+    if(isMod) {
+      removeUserFromModBox(nick)
+    } else { () }
+  }
+
+  fun muteUser(nick) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> got muted :(</p></#>;
+    addToMsgBox(to_add)
+  }
+
+  fun unmuteUser(nick) {
+    var to_add = <#><p><b>{stringToXml(nick)}</b> got unmuted :D </p></#>;
+    addToMsgBox(to_add)
+  }
+
+  fun addAdminForm(outgoingAP, nicknames) {
+    fun getSelectedUser() {
+      DomFunctions.getInputContents("clientSelect")
+    }
+
+    fun kickUser() {
+      if (getSelectedUser() <> "") {
+        OutgoingMessageHandler.kickUser(outgoingAP, getSelectedUser())
+      } else { () }
+    }
+
+    fun muteUser() {
+      if (getSelectedUser() <> "") {
+        OutgoingMessageHandler.muteUser(outgoingAP, getSelectedUser())
+      } else { () }
+    }
+
+    fun makeModerator() {
+      if (getSelectedUser() <> "") {
+        OutgoingMessageHandler.makeModerator(outgoingAP, getSelectedUser())
+      } else { () }
+    }
+
+    fun makeOptions(names) {
+      switch(names) {
+        case [] -> ()
+        case x::xs -> addUserToModBox(x); makeOptions(xs)
+      }
+    }
+
+
+    var adminForm =
+      <#>
+        <form id="adminForm" l:onsubmit="{()}">
+          <p>
+            <select id="clientSelect" required="required">
+              <option value="">None selected</option>
+            </select><br/>
+            <input type="submit" id="adminRemove" value="Kick"
+            l:onclick="{ kickUser() }"/>
+            <input type="submit" id="adminMute" value="Mute/Unmute"
+            l:onclick="{ muteUser() }"/>
+            <input type="submit" id="adminMakeAdmin" value="Make moderator"
+            l:onclick="{ makeModerator() }"/>
+          </p>
+        </form>
+      </#>;
+    domReplaceChildren(adminForm, getNodeById("admin_placeholder"));
+    makeOptions(nicknames)
+  }
+
+}
+
 # Receives messages from the chat server, and modifies the
 # DOM as a result.
 module IncomingMessageHandler {
 
-  fun init(outgoingAP, clientReceive) {
-    fun loop(clientReceive) {
+  fun init(outgoingAP, clientReceive, isMod, nicks) {
+    fun loop(clientReceive, isMod, nicks) {
       offer(clientReceive) {
         case IncomingChatMessage(s) ->
           var ((nick, chatmsg), s) = receive(s);
           debug("Received incoming chat message (" ^^ chatmsg ^^ ") from (" ^^ nick ^^ ")");
           DomFunctions.addChatMsg(nick, chatmsg);
-          loop(s)
+          loop(s, isMod, nicks)
         case NewUser(s) ->
           var (nick, s) = receive(s);
-          DomFunctions.addNewUser(nick);
-          loop(s)
+          DomFunctions.addNewUser(nick, isMod);
+          loop(s, isMod, nick :: nicks)
         case NewTopic(s) ->
           var (topic, s) = receive(s);
           DomFunctions.changeTopic(topic);
-          loop(s)
+          loop(s, isMod, nicks)
         case UserLeft(s) ->
           var (nick, s) = receive(s);
-          DomFunctions.removeUser(nick); # Poor Nick
-          loop(s)
+          DomFunctions.removeUser(nick, isMod); # Poor Nick
+          var nicks = filter(fun(nickCmp) { nick <> nickCmp }, nicks);
+          loop(s, isMod, nicks)
         case UserMuted(s) ->
           var (nick, s) = receive(s);
           DomFunctions.muteUser(nick);
-          loop(s)
+          loop(s, isMod, nicks)
         case UserUnmuted(s) ->
           var (nick, s) = receive(s);
           DomFunctions.unmuteUser(nick);
-          loop(s)
+          loop(s, isMod, nicks)
         case BecomeModerator(s) ->
           var (chan, s) = receive(s);
-          cancel(chan); # FIXME: FOR NOW ONLY!
-          loop(s)
+          DomFunctions.addAdminForm(outgoingAP, nicks);
+          OutgoingMessageHandler.becomeModerator(outgoingAP, chan);
+          loop(s, true, nicks)
         case Kick(_) ->
           # FIXME: We want to eliminate the use of redirect.
           redirect("/");
           ()
       }
     }
-    ignore(spawnClient { loop(clientReceive) })
+    ignore(spawnClient { loop(clientReceive, isMod, nicks) })
   }
 
 }
@@ -265,24 +340,7 @@ fun mainPage() {
   # 2. the server about users entering/leaving rooms so they can be removed
   #    from the dropdown selection box
 # fun moderatorHandler(channel) {
-#   fun makeOption(name) {
-#     var to_add = <#><option id="/id_placeholder">
-#                  {stringToXml(name)}</option></#>;
-#     appendChildren(to_add, getNodeById("clientSelect"));
-#     var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
-#                                    "value", name);
-#     var _ = domSetAttributeFromRef(getNodeById("/id_placeholder"),
-#                                    "id", "/moderator"^^name);
-#     ()
-#   }
-#
-#   fun makeOptions(names) {
-#     switch(names) {
-#       case [] -> ()
-#       case x::xs -> makeOption(x); makeOptions(xs)
-#     }
-#   }
-#
+#   #
 #   receive {
 #     case NewUser(name) ->
 #       makeOption(name);
@@ -351,51 +409,6 @@ fun mainPage() {
       </#>
     }
 
-
-    fun addAdminForm(outgoingAP) {
-      fun getSelectedUser() {
-        DomFunctions.getInputContents("clientSelect")
-      }
-
-      fun kickUser() {
-        if (getSelectedUser() <> "") {
-          OutgoingMessageHandler.kickUser(outgoingAP, getSelectedUser())
-        } else { () }
-      }
-
-      fun muteUser() {
-        if (getSelectedUser() <> "") {
-          OutgoingMessageHandler.muteUser(outgoingAP, getSelectedUser())
-        } else { () }
-      }
-
-      fun makeModerator() {
-        if (getSelectedUser() <> "") {
-          OutgoingMessageHandler.makeModerator(outgoingAP, getSelectedUser())
-        } else { () }
-      }
-
-      var adminForm =
-        <#>
-          <form id="adminForm" l:onsubmit="{()}">
-            <p>
-              <select id="clientSelect" required="required">
-                <option value="">None selected</option>
-              </select><br/>
-              <input type="submit" id="adminRemove" value="Kick"
-              l:onclick="{ kickUser() }"/>
-              <input type="submit" id="adminMute" value="Mute/Unmute"
-              l:onclick="{ muteUser() }"/>
-              <input type="submit" id="adminMakeAdmin" value="Make moderator"
-              l:onclick="{ makeModerator() }"/>
-            </p>
-          </form>
-        </#>;
-      domReplaceChildren(adminForm, getNodeById("admin_placeholder"))
-    }
-
-
-    # TODO: Inspect moderatorChan to see whether we're a moderator or not
     var (isMod, moderatorChan) =
       switch(moderatorChan) {
         case Just(c) -> (true, Just(c))
@@ -406,14 +419,14 @@ fun mainPage() {
     var outgoingAP = OutgoingMessageHandler.init(clientSend, moderatorChan);
 
     # Spawn process which handles incoming messages from the server
-    IncomingMessageHandler.init(outgoingAP, clientReceive);
+    IncomingMessageHandler.init(outgoingAP, clientReceive, isMod, nicknames);
 
     # Finally, remove the name request box, put the chatbox in, put mod form in
     # if required, and start off
     domReplaceChildren(chatBox(outgoingAP), getNodeById("main"));
 
     if (isMod) {
-      addAdminForm(outgoingAP)
+      DomFunctions.addAdminForm(outgoingAP, nicknames)
     } else {
       ()
     }
