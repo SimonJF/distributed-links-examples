@@ -41,7 +41,7 @@ typename LinList(a) = [| LinNil | LinCons: (a, LinList(a)) |];
 
 module AssocLinList {
 
-  sig contains : (String, LinList((String, (b :: Session)))) ~> (Bool, LinList((String, (b :: Session))))
+  sig contains : (String, LinList((String, b))) ~> (Bool, LinList((String, b)))
   fun contains(k, xs) {
     switch(xs) {
       case LinNil -> (false, LinNil)
@@ -56,14 +56,13 @@ module AssocLinList {
   }
 
 # Maps a function over all channels
-  sig map : (((s :: Session) ~e~> t :: Session),
-    LinList((String, s))) ~e~>
-    LinList((String, t))
-  fun map(f, chans) {
-    switch(chans) {
+ # sig map : ((a) ~e~> b, LinList((String, a))) ~e~>
+ #   LinList((String, b))
+  fun map(f, xs) {
+    switch(xs) {
       case LinNil -> LinNil
-      case LinCons((k, ch), chs) ->
-        LinCons((k, f(ch)), (map(f, chs)))
+      case LinCons((k, x), xs) ->
+        LinCons((k, f(x)), (map(f, xs)))
     }
   }
   # Finds an entry in a linear association list.

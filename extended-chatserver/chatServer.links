@@ -79,6 +79,9 @@ module Room {
      topic:String,
      ap:RoomHandle);
 
+  typename ClientInfo = (name:String, isMod:Bool, isMuted:Bool);
+  typename ClientMap = LinList((String, (RoomSend, ClientInfo)));
+
   # Gets us a pair of (RoomSend, ~RoomSend) endpoints.
   # Perhaps this should be in the standard library.
   sig createRoomSend : () ~> (RoomSend, ~RoomSend)
@@ -94,14 +97,15 @@ module Room {
     (ep1, ep2)
   }
 
-  sig loop : (RoomState, LinList((Nickname, RoomSend))) ~> ()
+  sig loop : (RoomState, ClientMap) ~> ()
   fun loop(state, clients) {
 
-    sig broadcastJoined : (Nickname, LinList((String, RoomSend))) ~> LinList((String, RoomSend))
+    sig broadcastJoined : (Nickname, ClientMap) ~> ClientMap
     fun broadcastJoined(nick, clients) {
-      AssocLinList.map(fun(s) {
+      AssocLinList.map(fun((s, info)) {
         var s = select NewUser s;
-        send(nick, s)
+        var s = send(nick, s);
+        (s, info)
       }, clients)
     }
 
@@ -109,7 +113,7 @@ module Room {
 
     fun kickUser(nick, clients) {
       switch(AssocLinList.find(nick, clients)) {
-        case (Just(nick, s), clients) ->
+        case (Just(nick, (s, info)), clients) ->
           var _ = select Kick s;
           clients
         case (Nothing, clients) -> clients
@@ -122,6 +126,10 @@ module Room {
 
     fun makeModerator(nick, clients) {
       clients
+    }
+
+    fun newClient(nick, chan, isMod) {
+      (chan, (name=nick, isMod=isMod, isMuted=false))
     }
 
     offer(s) {
@@ -143,59 +151,70 @@ module Room {
             var _ =
               send(JoinedAsModerator(state.topic,
                 clientReceive, moderatorSend), s);
-            loop(state, LinCons((nick, roomSend), clients))
+            var clients = LinCons((nick, newClient(nick, roomSend, true)), clients);
+            loop(state, clients)
           } else {
             var (roomSend, clientReceive) = createRoomSend();
             var clients = broadcastJoined(nick, clients);
             var _ = send(Joined(state.topic, clientReceive), s);
-            loop(state, LinCons((nick, roomSend), clients))
+            var clients = LinCons((nick, newClient(nick, roomSend, false)), clients);
+            loop(state, clients)
           }
         }
       case Chat(s) ->
         var ((nick, msg), _) = receive(s);
-        var clients = AssocLinList.map(fun(s) {
+        var clients = AssocLinList.map(fun((s, info)) {
           var s = select IncomingChatMessage s;
-          send ((nick, msg), s)
+          var s = send ((nick, msg), s);
+          (s, info)
         }, clients);
         loop(state, clients)
       case NewTopic(s) ->
         var (newTopic, _) = receive(s);
-        var clients = AssocLinList.map(fun(s) {
+        var clients = AssocLinList.map(fun((s, info)) {
           var s = select NewTopic s;
-          send(newTopic, s)
+          var s = send(newTopic, s);
+          (s, info)
         }, clients);
         loop((state with topic=newTopic), clients)
       case Leave(s) ->
         var (name, _) = receive(s);
-        var clients = AssocLinList.map(fun(s) {
+        var clients = AssocLinList.map(fun((s, info)) {
           var s = select UserLeft s;
-          send(name, s)
+          var s = send(name, s);
+          (s, info)
         }, clients);
         loop(state, clients)
       case KickUser(s) ->
         var (name, _) = receive(s);
-        var clients = AssocLinList.map(fun(s) {
+        var clients = AssocLinList.map(fun((s, info)) {
           var s = select UserLeft s;
-          send(name, s)
+          var s = send(name, s);
+          (s, info)
         }, clients);
         var clients = kickUser(name, clients);
         loop(state, clients)
       case MuteUser(s) ->
         var (name, _) = receive(s);
-        var clients = AssocLinList.map(fun(s) {
+        var clients = AssocLinList.map(fun((s, info)) {
           var s = select UserMuted s;
-          send(name, s)
+          var s = send(name, s);
+          (s, info)
         }, clients);
         var clients = muteUser(name, clients);
         loop(state, clients)
       case MakeModerator(s) ->
         var (name, _) = receive(s);
+# TODO: Check if user is moderator already
         var clients = makeModerator(name, clients);
         loop(state, clients)
       case Kill(s) ->
         # Since after selecting Kick, all elements will be of type End
         # (and therefore unrestricted), we can dispose of `clients`.
-        var _ = AssocLinList.map(fun(s) { select Kick s }, clients);
+        var _ = AssocLinList.map(fun((s, info)) {
+          var s = select Kick s;
+          (s, info)
+        }, clients);
         () # Stop evaluating
     }
   }
