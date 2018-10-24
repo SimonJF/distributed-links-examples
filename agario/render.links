@@ -1,4 +1,3 @@
-open Util.Lists
 open Util.Colour
 open Util.Conversions
 open Logic
@@ -30,22 +29,21 @@ fun draw(player_id, state: GameState) {
         var grid_lines_distance = ftoi(scale *. itof(grid_lines_distance));
 
         jsBeginPath(ctx);
-        var xs = lsFilter(fun(x) { x /. scale > player_x *. scale -. x_offset /. scale &&
+        var xs = filter(fun(x) { x /. scale > player_x *. scale -. x_offset /. scale &&
                                    x *. scale < player_x /. scale +. x_offset *. scale},
-                          lsMap(fun(x){ itof(grid_lines_distance * x) },
-                                lsRange(-screenWidth/2/grid_lines_distance,
-                                        (gameWidth+screenWidth/2)/grid_lines_distance)));
-        lsMapIgnore(fun(x){ jsMoveTo(ctx, (x -. player_x) *. scale +. x_offset, 0.0);
+                          map(fun(x){ itof(grid_lines_distance * x) },
+                                [-screenWidth/2/grid_lines_distance .. (gameWidth+screenWidth/2)/grid_lines_distance]));
+        iter(fun(x){ jsMoveTo(ctx, (x -. player_x) *. scale +. x_offset, 0.0);
                             jsLineTo(ctx, (x -. player_x) *. scale +. x_offset, screenHeightFloat);
                             jsStroke(ctx)},
                             xs);
 
-        var ys = lsFilter(fun(y) { y /. scale > player_y *. scale -. y_offset /. scale &&
+        var ys = filter(fun(y) { y /. scale > player_y *. scale -. y_offset /. scale &&
                                    y *. scale < player_y /. scale +. y_offset *. scale},
-                          lsMap(fun(y){ itof(grid_lines_distance * y) },
-                                lsRange(-screenHeight/2/grid_lines_distance,
-                                        (gameHeight+screenHeight/2)/grid_lines_distance)));
-        lsMapIgnore(fun(y){ jsMoveTo(ctx, 0.0, (y -. player_y) *. scale +. y_offset);
+                          map(fun(y){ itof(grid_lines_distance * y) },
+                                [-screenHeight/2/grid_lines_distance ..
+                                        (gameHeight+screenHeight/2)/grid_lines_distance]));
+        iter(fun(y){ jsMoveTo(ctx, 0.0, (y -. player_y) *. scale +. y_offset);
                             jsLineTo(ctx, screenWidthFloat, (y -. player_y) *. scale +. y_offset);
                             jsStroke(ctx)},
                             ys);
@@ -78,8 +76,8 @@ fun draw(player_id, state: GameState) {
     fun draw_food(player, scale) {
         var food_state = state.food;
         var blob = hd(player.blobs);
-        var cells = lsZip(food_state.pos, food_state.colour);
-        lsMapIgnore(fun(cell) {
+        var cells = zip(food_state.pos, food_state.colour);
+        iter(fun(cell) {
                         draw_circle(((cell.1).1 -. blob.x) *. scale +. x_offset,
                                     ((cell.1).2 -. blob.y) *. scale +. y_offset,
                                     food_radius, 1.0, cell.2, "grey", scale)
@@ -87,49 +85,47 @@ fun draw(player_id, state: GameState) {
     }
 
     fun draw_players(player: PlayerState, players, scale) {
-        if (lsEmpty(players))
-            ()
-        else {
+        switch(players) {
+          case [] -> ()
+          case p :: players ->
             var (x_com, y_com) = centre_of_mass(player.blobs);
             var blob = hd(player.blobs);
-            switch (lsHead(players)) {
-                case (id, curr_player) -> {
-                    if (id == player_id) {
-                        ignore(map(fun(curr_blob) {
-                                var draw_x = x_offset -. x_com +. curr_blob.x;
-                                var draw_y = y_offset -. y_com +. curr_blob.y;
-                                draw_circle(draw_x, draw_y,
-                                            player_radius(curr_blob.mass), 3.0,
-                                            curr_player.colour.1, curr_player.colour.2, scale);
-                                draw_player_name(curr_player.name, curr_blob.mass, draw_x, draw_y);
-                                # draw_player_name(itos(curr_blob.mass), curr_blob.mass, draw_x, draw_y);
-                            }, curr_player.blobs));
-                    } else {
-                        ignore(map(fun(curr_blob) {
-                                var draw_x = (curr_blob.x -. blob.x) *. scale +. x_offset;
-                                var draw_y = (curr_blob.y -. blob.y) *. scale +. y_offset;
-                                draw_circle(draw_x, draw_y,
-                                            player_radius(curr_blob.mass), 3.0,
-                                            curr_player.colour.1, curr_player.colour.2, scale);
-                                draw_player_name(curr_player.name, curr_blob.mass, draw_x, draw_y);
-                                # draw_player_name(itos(curr_blob.mass), curr_blob.mass, draw_x, draw_y);
-                                }, curr_player.blobs));
-                    };
-                    draw_players(player, lsTail(players), scale)
-                }
-            }
+            var (id, curr_player) = p;
+            if (id == player_id) {
+                ignore(map(fun(curr_blob) {
+                        var draw_x = x_offset -. x_com +. curr_blob.x;
+                        var draw_y = y_offset -. y_com +. curr_blob.y;
+                        draw_circle(draw_x, draw_y,
+                                    player_radius(curr_blob.mass), 3.0,
+                                    curr_player.colour.1, curr_player.colour.2, scale);
+                        draw_player_name(curr_player.name, curr_blob.mass, draw_x, draw_y);
+                        # draw_player_name(itos(curr_blob.mass), curr_blob.mass, draw_x, draw_y);
+                    }, curr_player.blobs));
+            } else {
+                ignore(map(fun(curr_blob) {
+                        var draw_x = (curr_blob.x -. blob.x) *. scale +. x_offset;
+                        var draw_y = (curr_blob.y -. blob.y) *. scale +. y_offset;
+                        draw_circle(draw_x, draw_y,
+                                    player_radius(curr_blob.mass), 3.0,
+                                    curr_player.colour.1, curr_player.colour.2, scale);
+                        draw_player_name(curr_player.name, curr_blob.mass, draw_x, draw_y);
+                        # draw_player_name(itos(curr_blob.mass), curr_blob.mass, draw_x, draw_y);
+                        }, curr_player.blobs));
+            };
+            draw_players(player, players, scale)
         }
     }
 
     # if alive, draw the player, else draw the biggest player remaining
-    var player_maybe = lsDictLookup(player_id, state.players);
+    var player_maybe = lookup(player_id, state.players);
     var player =
-        if (isJust(player_maybe))
-            fromJust(player_maybe)
-        else {
-            print("drawing biggest player reminding with "^^intToString(lsLength(state.players))^^" players.");
+        switch(player_maybe) {
+          case Just(player) -> player
+          case Nothing ->
+            print("drawing biggest player reminding with "^^intToString(length(state.players))^^" players.");
             highest_mass_player((name="", colour=("",""),
-                                 blobs=[(id=1, x=1000.0, y=1000.0, mass=0, split_pos=(-.1.0,-.1.0))]): PlayerState, state.players)};
+                                 blobs=[(id=1, x=1000.0, y=1000.0, mass=0, split_pos=(-.1.0,-.1.0))]): PlayerState, state.players)
+        };
     print("got player");
     var scale = get_scale(player);
     var (player_x, player_y) = centre_of_mass(player.blobs);
@@ -144,7 +140,4 @@ fun draw(player_id, state: GameState) {
         jsCanvasFont(ctx, "60px Ubuntu");
         jsFillText(ctx, "Game over!", 230.0, 220.0);
     } else ();
-
-
-    ()
 }

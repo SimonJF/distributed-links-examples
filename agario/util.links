@@ -1,73 +1,3 @@
-# Utility module, contains submodules:
-#   * Lists
-#   * ToString
-#   * Colour
-
-module Lists {
-  fun lsMap(f, l) {
-      if (lsEmpty(l)) lsNilF()
-      else lsCons(f(lsHead(l)), lsMap(f, lsTail(l)))
-  }
-
-  fun lsFilter(p, l) {
-      if (lsEmpty(l)) lsNilF()
-      else if (p(lsHead(l))) lsCons(lsHead(l), lsFilter(p, lsTail(l)))
-      else lsFilter(p, lsTail(l))
-  }
-
-  fun lsMapIgnore(f, l) {
-      if (lsEmpty(l)) ()
-      else { var _ = f(lsHead(l)); lsMapIgnore(f, lsTail(l)) }
-  }
-
-  fun lsCatMaybes(l) {
-      if (lsEmpty(l)) lsNilF()
-      else switch (lsHead(l)) {
-          case Just(x) -> lsCons(x, lsCatMaybes(lsTail(l)))
-          case Nothing -> lsCatMaybes(lsTail(l))
-      }
-  }
-
-  fun lsFoldLeft(f, i, l) {
-      if (lsEmpty(l)) i
-      else lsFoldLeft(f, f(i, lsHead(l)), lsTail(l))
-  }
-
-  fun lsUnzip(l) {
-      switch (lsEmpty(l)) {
-          case false -> {var prev_l = lsUnzip(lsTail(l));
-                         (lsCons(lsHead(l).1, prev_l.1), lsCons(lsHead(l).2, prev_l.2)) }
-          case true -> (lsNilF(), lsNilF())
-      }
-  }
-
-  #sig lsDictAdd: (a, b, [(a,b)]) ~> [(a,b)]
-  fun lsDictAdd(k, v, dict) {
-      switch (lsEmpty(dict)) {
-          case true -> lsCons((k, v), lsNilF())
-          case false -> {
-              if (k == lsHead(dict).1)
-                  lsCons((k, v), lsTail(dict))
-              else
-                  lsCons(lsHead(dict), lsDictAdd(k ,v, lsTail(dict)))
-          }
-      }
-  }
-
-  #sig lsDictLookup: (a, [(a,b)]) ~> Maybe(b)
-  fun lsDictLookup(k, dict) {
-      switch(lsEmpty(dict)) {
-          case true -> Nothing
-          case false -> {
-              if (k == lsHead(dict).1)
-                  Just(lsHead(dict).2)
-              else
-                  lsDictLookup(k, lsTail(dict))
-          }
-      }
-  }
-}
-
 module Conversions {
   fun itos(x) { intToString(x) }
   fun ftoi(x) { floatToInt(x) }
@@ -76,13 +6,12 @@ module Conversions {
 }
 
 module Colour {
-  open Lists
   open Conversions
 
   fun dec_to_hex(d: Int) {
       # only works for 2-digit hex numbers
-      var hex = ls([mod(d/16, 16), mod(d, 16)]);
-      var hex_str = lsMap(fun(x) {switch(x) {
+      var hex = [mod(d/16, 16), mod(d, 16)];
+      var hex_str = map(fun(x) {switch(x) {
                                       case "10" -> "A"
                                       case "11" -> "B"
                                       case "12" -> "C"
@@ -90,8 +19,8 @@ module Colour {
                                       case "14" -> "E"
                                       case "15" -> "F"
                                       case x -> x}},
-                           lsMap(itos, hex));
-      lsHead(hex_str) ^^ lsHead(lsTail(hex_str))
+                           map(itos, hex));
+      hd(hex_str) ^^ hd(tl(hex_str))
   }
 
   fun hsv_to_rgb(h: Float, s: Float, v: Float) {
@@ -102,14 +31,14 @@ module Colour {
       var t = v *. (1.0 -. (1.0 -. f) *. s);
 
       var rgb = switch (h_i) {
-                  case 0 -> ls([v, t, p])
-                  case 1 -> ls([q, v, p])
-                  case 2 -> ls([p, v, t])
-                  case 3 -> ls([p, q, v])
-                  case 4 -> ls([t, p, v])
-                  case 5 -> ls([v, p ,q])
+                  case 0 -> [v, t, p]
+                  case 1 -> [q, v, p]
+                  case 2 -> [p, v, t]
+                  case 3 -> [p, q, v]
+                  case 4 -> [t, p, v]
+                  case 5 -> [v, p ,q]
               };
-      lsMap(fun(x) {dec_to_hex(ftoi(256.0 *. x))}, rgb)
+      map(fun(x) {dec_to_hex(ftoi(256.0 *. x))}, rgb)
   }
 
   fun random_colour(h: Float, s:Float, v: Float) {
@@ -122,7 +51,7 @@ module Colour {
           else
               h;
       var vals = hsv_to_rgb(h, s, v);
-      lsFoldLeft(fun(x,y){x^^y}, "#", vals)
+      fold_left(fun(x,y){x^^y}, "#", vals)
   }
 
 }

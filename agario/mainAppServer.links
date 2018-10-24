@@ -1,4 +1,3 @@
-open Util.Lists
 open Render
 open Logic
 open MainAppClient
@@ -79,7 +78,7 @@ fun main() {
   var gameManager = spawn { players_manager([], [], [], 1) };
   var acc = spawn { client_acceptor(clientAP, gameManager) };
   var server_time = serverTime();
-  addRoute("/", fun (_, _) { MainAppClient.mainPage(clientAP) } );
+  addRoute("/", fun (_) { MainAppClient.mainPage(clientAP) } );
   addStaticRoute("/css", "css", [("css", "text/css")]);
   serveWebsockets();
   servePages()

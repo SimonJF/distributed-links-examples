@@ -1,4 +1,3 @@
-open Util.Lists
 open Util.Conversions
 open Util.Colour
 open Render
@@ -31,13 +30,13 @@ fun cursor_loop(game_ap, prev_time:Int) client {
 # it to the drawing routine
 fun main_game_loop(ap:AP(ClientChannel), player_id, drawHandler, game_state, eaten_blobs, kill_blobs) client {
   fun inGame(player_id, game_state) {
-    isJust(lsDictLookup(player_id, game_state.players))
+    isJust(lookup(player_id, game_state.players))
   }
 
   var s:ClientChannel = accept(ap);
   offer(s) {
     case UpdatePlayers(s) ->
-      var player_state_maybe = lsDictLookup(player_id, game_state.players);
+      var player_state_maybe = lookup(player_id, game_state.players);
       var s = send((player_id, player_state_maybe, eaten_blobs, kill_blobs), s);
       var (new_players, _) = receive(s);
       var game_state_new = (game_state with players=new_players);
@@ -51,8 +50,9 @@ fun main_game_loop(ap:AP(ClientChannel), player_id, drawHandler, game_state, eat
            main_game_loop(ap, player_id, drawHandler, game_state_new,
                           concat([eaten_blobs_new, eaten_blobs]),
                           concat([kill_blobs_new, kill_blobs]))
-       } else
+       } else {
          main_game_loop(ap, player_id, drawHandler, game_state, eaten_blobs, kill_blobs)
+       }
   }
 }
 
@@ -118,10 +118,10 @@ fun server_handler_loop(update_channel:(~UpdatePlayerChannel),
       var update_channel = send((state=player_state, kill_blobs=kill_blobs, eaten_blobs=eaten_blobs):PlayerUpdateInfo,
                                 update_channel);
       var (players:([(Int, PlayerState)]), update_channel) = receive(update_channel);
-      ignore(send(ls(players), channel));
+      ignore(send(players, channel));
       server_handler_loop(update_channel:(~UpdatePlayerChannel), game_ap, curr_time)
     } else {
-      ignore(send(ls([]), channel));
+      ignore(send([], channel));
       ignore(send((player_id, kill_blobs), select Died update_channel));
       redirect("/");
     }
@@ -138,7 +138,7 @@ fun initialize(player_name:String, ap) client {
     var (player_id, s) = receive(s);
 
     var init_game:GameState = initial_game_state(player_name, player_id);
-    var player_state:PlayerState = lsHead(init_game.players).2;
+    var player_state:PlayerState = hd(init_game.players).2;
     var update_channel = send(player_state, s);
 
     var drawHandler = spawnClient { draw_game_loop(player_id) };
