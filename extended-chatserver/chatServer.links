@@ -113,7 +113,7 @@ module Room {
 
     fun kickUser(nick, clients) {
       switch(AssocLinList.find(nick, clients)) {
-        case (Just(nick, (s, info)), clients) ->
+        case (Just((s, info)), clients) ->
           var _ = select Kick s;
           clients
         case (Nothing, clients) -> clients
@@ -163,12 +163,28 @@ module Room {
         }
       case Chat(s) ->
         var ((nick, msg), _) = receive(s);
-        var clients = AssocLinList.map(fun((s, info)) {
-          var s = select IncomingChatMessage s;
-          var s = send ((nick, msg), s);
-          (s, info)
-        }, clients);
-        loop(state, clients)
+        # First, check to see whether the user is muted.
+        var (maybeRes, clients) = AssocLinList.find(nick, clients);
+        switch(maybeRes) {
+          case Just((s, info)) ->
+            # Check whether the user is muted.
+            if (info.isMuted) {
+              # If so, we ain't broadcasting the message.
+              var s = select IncomingChatMessage s;
+              var s = send(("System Message", "Not sending message as you are muted."), s);
+              loop(state, LinCons((nick, (s, info)), clients))
+            } else {
+              var clients = AssocLinList.map(fun((s, info)) {
+                var s = select IncomingChatMessage s;
+                var s = send ((nick, msg), s);
+                (s, info)
+              }, LinCons((nick, (s, info)), clients));
+              loop(state, clients)
+            }
+          case Nothing ->
+            # User doesn't exist -- no-op.
+            loop(state, clients)
+        }
       case NewTopic(s) ->
         var (newTopic, _) = receive(s);
         var clients = AssocLinList.map(fun((s, info)) {

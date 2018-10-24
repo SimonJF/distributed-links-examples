@@ -75,7 +75,7 @@ module AssocLinList {
       case LinNil -> (Nothing, LinNil)
       case LinCons((kComp, s), xs) ->
         if (k == kComp) {
-          (Just(kComp, s), xs)
+          (Just(s), xs)
         } else {
           var (result, xs) = find(k, xs);
           (result, LinCons((kComp, s), xs))
